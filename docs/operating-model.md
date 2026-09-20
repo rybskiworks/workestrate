@@ -1,6 +1,6 @@
 # Operating model — as-built operator guide (A6)
 
-The operator-facing description of how workestrate homes run day to day:
+The operator-facing description of how workestrate configs run day to day:
 what "prod" means, how dev work happens without moving pins, what gets
 consumed from where, and how teardown, images, and provenance behave. It
 is **as-built**: every mechanism below was verified against the code on
@@ -33,8 +33,8 @@ each `[repos.<name>]` entry carries `{url, ref, rev, sha, fetched_at}` —
 Additional refs of the same repo are pinned per-ref under
 `[repos.<name>.refs.<ref>]` with the same `{rev, sha, fetched_at}` shape.
 The lock is generated — never hand-edited — and written only by explicit
-verbs (`config add`, `config update`, `config remove`, `home init`,
-`home clone`) or first-resolution-with-notice; no
+verbs (`config add`, `config update`, `config remove`, `config init`,
+`config clone`) or first-resolution-with-notice; no
 verb moves a pin silently as a side effect.
 
 Overrides exist at two levels: per-entry (`ref`/`rev` fields in the
@@ -46,7 +46,7 @@ touches the pins.
 
 Dev freshness is opt-in by ref, in two forms:
 
-* **Whole-home override** — `workestrate --config-ref feat-x <verb>`
+* **Whole-config override** — `workestrate --config-ref feat-x <verb>`
   resolves every git-backed config entry at that ref (via the archive
   cache) and *implies the context*: a branch-shaped ref becomes the active
   context name. A 40-hex sha is legal for consumption but implies no
@@ -54,7 +54,7 @@ Dev freshness is opt-in by ref, in two forms:
 * **Per-workload inline override** — `workload up prime:feat-x[@canary]`.
   Grammar `name[:ref][@id]`: `:` = config branch, `@` = instance id. The
   named workload's capsule is read at `<ref>` from its declaring repo's
-  archive while everything else stays home-scoped. Dependencies never
+  archive while everything else stays config-scoped. Dependencies never
   follow the override in v1.
 
 A **bare `name@id` (no colon) is rejected** with guidance to use
@@ -89,7 +89,7 @@ commit-before-consume does NOT apply.
 **Upgrade note (verified behavior).** Resolution precedence for a git-backed
 entry is: (1) the lock pin — silent; (2) the registry-recorded `rev` —
 **also silent**; (3) first resolution with a stderr notice — the ONLY
-notice path. A home upgraded from a pre-lock-v2 binary therefore has pins
+notice path. A config upgraded from a pre-lock-v2 binary therefore has pins
 already (a v1 lock's `rev`, or a registry-recorded `rev`) and switches to
 pinned-archive consumption **without any notice firing**; the notice only
 announces a first-ever resolution of an unpinned entry. Expected
@@ -105,14 +105,14 @@ defaults and is NOT version-bumped on read — readers never rewrite. A lock
 with a version newer than the binary supports is a **hard error**:
 
 ```
-home created by a newer workestrate (lock version N > M supported by this
-binary); upgrade this workestrate before using the home at <path>
+config created by a newer workestrate (lock version N > M supported by this
+binary); upgrade this workestrate before using the config at <path>
 ```
 
 This posture is by design (fail-closed, like every other versioned file).
 **Ordering consequence for operators:** sync the nix profile to the new
-binary BEFORE pointing old binaries at an updated home. An old binary
-meeting a v2 lock refuses the home rather than misreading it.
+binary BEFORE pointing old binaries at an updated config. An old binary
+meeting a v2 lock refuses the config rather than misreading it.
 
 ## 5. Worktrees are for editing, never for consumption
 
@@ -135,7 +135,7 @@ flag sets `WORKESTRATE_CONTEXT` at CLI entry, which also propagates it to
 detached children via spawn env inheritance. Checkout-branch derivation
 happens CLI-side inside the invocation — the resolver inspects the first
 layer's checkout branch itself. There is no shell integration to install.
-(The only hooks in the tree are unrelated: the home repo's pre-commit
+(The only hooks in the tree are unrelated: the config's pre-commit
 tombi gate and workload pre-start seed hooks.)
 
 ## 7. Context model quick reference
@@ -144,7 +144,7 @@ Derivation order (pinned; first match wins):
 
 1. explicit `--context` / `WORKESTRATE_CONTEXT` — strict semantics: when
    contexts are defined the name must be one of them (hard error
-   otherwise); a contexts-less home ignores the env var;
+   otherwise); a contexts-less config ignores the env var;
 2. `--config-ref <branch>` — a branch-shaped ref becomes the context-name
    candidate (a sha implies nothing);
 3. checkout branch of the FIRST layer's checkout;
@@ -181,8 +181,8 @@ move what prod resolves.
 Retention is keep-last-N with a cascade (first configured value wins):
 
 ```
-built-in default N=5  <  home settings image_keep_last
-                      <  config-repo entry image_keep_last
+built-in default N=5  <  config settings image_keep_last
+                      <  fleet entry image_keep_last
                       <  workload capsule image.keep_last
 ```
 
@@ -236,7 +236,7 @@ compare stamps and honor the disposition.
 Teardown scopes, narrowest to widest:
 
 ```
-instance < workload < context < config-ref < home (--all) < everything
+instance < workload < context < config-ref < config (--all) < everything
 ```
 
 The instance/workload rungs stay on
@@ -251,7 +251,7 @@ usage error).
 
 Exact gates, as implemented:
 
-* **Managed rungs** (context/config-ref/home) take the standard single
+* **Managed rungs** (context/config-ref/config) take the standard single
   yes-gate: interactive prompt unless `--yes`; a piped `y`/`yes`
   confirms; a declined prompt aborts with exit 1.
 * **`--everything` is DOUBLE-gated.** (a) The flag must appear TWICE —
@@ -280,7 +280,7 @@ deliberately NOT implemented (ADR 0032 narrowing pin: tags are immutable
 
 Outcomes: every target goes through the hardened six-step teardown (stop →
 wait-exit → remove → unregister → policy-dir → sandbox-dir); per-target
-results print under one scope header (`down --all (home): N target(s)`),
+results print under one scope header (`down --all (config): N target(s)`),
 JSON wraps them as `{scope, results}`; ANY failure exits nonzero; an empty
 selection exits 0 reporting `0 target(s)`. Unmanaged candidates exist only
 under `--everything` and are reported with empty evidence honestly.

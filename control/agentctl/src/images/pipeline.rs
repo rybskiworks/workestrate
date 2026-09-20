@@ -64,7 +64,7 @@ use crate::images::state::{ImageRecord, ImagesState, Provenance, RepoIdentity, i
 pub struct BuildJob {
     /// Workload name from the merged config.
     pub workload: String,
-    /// Config-repo identity (name + path + flake_root) for the record.
+    /// Fleet identity (name + path + flake_root) for the record.
     pub repo: RepoIdentity,
     /// Flake attribute that builds the image tarball (e.g. `workestrate-pi`).
     pub attr: String,
@@ -132,7 +132,7 @@ impl std::fmt::Display for BuildError {
             BuildError::FakeHashPlaceholder { reference, detail } => write!(
                 f,
                 "nix build failed for '{reference}': the flake carries a placeholder hash \
-                 (fakeHash) for a fixed-output derivation; run the declaring repo's \
+                 (fakeHash) for a fixed-output derivation; run the declaring fleet's \
                  'update-hashes' recipe to fill real hashes, then retry (spec 21 §7)\n{detail}"
             ),
             BuildError::OfflineFetch { reference, detail } => write!(
@@ -174,7 +174,7 @@ const OFFLINE_MARKERS: &[&str] = &[
 /// Classify captured `nix build` stderr into the §7 failure rows. The
 /// fakeHash pattern is checked FIRST: a fixed-output hash mismatch is nix's
 /// `hash mismatch … specified: sha256-… / got: sha256-…` report, and it must
-/// point at the declaring repo's `update-hashes` recipe, not read as a
+/// point at the declaring fleet's `update-hashes` recipe, not read as a
 /// generic failure.
 pub fn classify_build_stderr(stderr: &str) -> NixFailureClass {
     if stderr.contains("hash mismatch")
@@ -433,7 +433,7 @@ pub trait ImageLoader {
 
 /// Real backend: `gunzip -c <outPath>` piped into `msb load -t <tag>` — two
 /// `std::process::Command`s, no shell, no tarball staged on disk (the
-/// anti-accumulation posture: nothing accumulates under the config repo or
+/// anti-accumulation posture: nothing accumulates under the fleet or
 /// the state dir). [`MsbCliLoader::new`] locates msb via
 /// [`crate::commands::doctor::msb_binary`] (the `MSB_PATH` convention);
 /// `MSB_HOME` is honored implicitly by msb itself. Program paths are
@@ -632,15 +632,15 @@ pub async fn run_build_pipeline<B: ImageBuilder, L: ImageLoader, P: StoreProbe>(
     probe: &mut P,
 ) -> Result<PipelineOutcome> {
     // Stage 1: nix build. NixAbsent maps to the SAME §7 wording the phase-C
-    // eval ladder uses for its hard-error row ("install nix / config-repo
+    // eval ladder uses for its hard-error row ("install nix / fleet
     // ritual") — build and --check share the nix-absent vocabulary.
     let out_path = builder
         .build_out_path(&job.repo.flake_root, &job.attr)
         .map_err(|e| match e {
             BuildError::NixAbsent => anyhow::anyhow!(
                 "nix is required to build '{}': nix was not found on PATH — install nix, \
-                 or load the image manually via the config-repo ritual (the declaring \
-                 repo's 'load-images' recipe), then retry (spec 21 §7)",
+                 or load the image manually via the fleet ritual (the declaring \
+                 fleet's 'load-images' recipe), then retry (spec 21 §7)",
                 job.tag
             ),
             other => anyhow::anyhow!("{other}"),
@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     /// A2: a tag-context job (e.g. an armed inline override `prime:feat-x`)
-    /// moves ONLY the `(name, ctx)` pointer — the home context's pointer
+    /// moves ONLY the `(name, ctx)` pointer — the config context's pointer
     /// (ctx=None) is untouched.
     #[tokio::test]
     async fn ctx_tagged_job_moves_only_the_ctx_pointer() -> Result<()> {
@@ -1087,7 +1087,7 @@ mod tests {
         let mut job = job_fixture();
         job.tag = "workestrate-pi:feat-x.abcdefghijkl".to_string();
         job.tag_ctx = Some("feat-x".to_string());
-        // Seed a home-context pointer; it must survive the ctx build.
+        // Seed a config-context pointer; it must survive the ctx build.
         let mut state = ImagesState::default();
         state.upsert_pointer(
             crate::images::state::pointer_key("personal", "workestrate-pi", None),
@@ -1129,7 +1129,7 @@ mod tests {
                 ))
                 .map(|p| p.tag.as_str()),
             Some("workestrate-pi:000000000000"),
-            "the home-context pointer NEVER flaps under an override build"
+            "the config-context pointer NEVER flaps under an override build"
         );
 
         let _ = std::fs::remove_dir_all(&state_dir);
@@ -1313,10 +1313,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("nix is required to build"), "{msg}");
         assert!(msg.contains("install nix"), "remediation: {msg}");
-        assert!(
-            msg.contains("load-images"),
-            "config-repo ritual pointer: {msg}"
-        );
+        assert!(msg.contains("load-images"), "fleet ritual pointer: {msg}");
         assert!(
             msg.contains("workestrate-pi:latest"),
             "names the tag: {msg}"
@@ -1327,7 +1324,7 @@ mod tests {
         Ok(())
     }
 
-    /// The §7 fakeHash error points at the declaring repo's `update-hashes`
+    /// The §7 fakeHash error points at the declaring fleet's `update-hashes`
     /// recipe, NOT a raw nix error wall.
     #[test]
     fn fakehash_error_points_at_update_hashes_recipe() {

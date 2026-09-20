@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The test uses the WP-E writability/isolation pattern (isolated
-//! `MSB_HOME` + `HOME` + `WORKESTRATE_CONFIG_DIR`) so it never touches the
+//! `MSB_HOME` + `HOME` + `WORKESTRATE_FLEET_DIR`) so it never touches the
 //! operator's real workestrate registry or msb state.
 
 #![allow(
@@ -40,7 +40,7 @@ const SLUG_RE: &str = r"^[a-z2-7]{4}$";
 
 /// Build a `workestrate` [`Command`] with fully isolated state: a fresh HOME,
 /// a fresh writable `MSB_HOME` (so the SDK's `<MSB_HOME>/db/msb.db` is
-/// openable and empty), and `WORKESTRATE_CONFIG_DIR` pointed at the committed
+/// openable and empty), and `WORKESTRATE_FLEET_DIR` pointed at the committed
 /// 5-workload fixture. Dummy non-placeholder values are injected for every
 /// required fixture secret so the create path does not bail on missing
 /// secrets on a provisioned host.
@@ -56,7 +56,7 @@ fn isolated_cmd(home: &std::path::Path, msb_home: &std::path::Path) -> Command {
         .join("tests")
         .join("fixtures")
         .join("config");
-    c.env("WORKESTRATE_CONFIG_DIR", &fixture);
+    c.env("WORKESTRATE_FLEET_DIR", &fixture);
     // Isolated, writable msb home (WP-E pattern): empty db → openable.
     c.env("MSB_HOME", msb_home);
     // Dummy non-placeholder secrets so the create path proceeds on a host.

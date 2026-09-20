@@ -1,5 +1,5 @@
 # Inverted-dependency flake: takes workestrate core as input.
-# This flake builds this config repo's nix-layered images from its
+# This flake builds this fleet's nix-layered images from its
 # workestrate.toml using core's exported lib recipes
 # (workestrate.lib.<system>.buildImagesFromConfig).
 #
@@ -53,7 +53,7 @@
 # npm-build's npmDepsHash is a fixed-output-derivation hash. Use
 # `lib.fakeHash` ("sha256-AAAA...AAA=") as a placeholder: drvPath
 # EVALUATION works, a real `nix build` fails with the `got:` hash. Compute
-# real hashes on a nix-capable host via the config repo justfile's
+# real hashes on a nix-capable host via the fleet justfile's
 # `update-hashes` workflow, then inline the value into the enrichment.
 #
 # ============================================================================

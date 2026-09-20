@@ -1015,7 +1015,7 @@ fn mark_generation_booted(gen_dir: &Path) {
 /// `builder.create()`; unit tests pass mocked probes. Off skips silently
 /// (legacy workloads never touch this path); otherwise the shared
 /// `nested_up_decision` applies — `prefer` degrades, `require` refuses
-/// fail-closed, a home-final seal refuses either ask.
+/// fail-closed, a config-final seal refuses either ask.
 ///
 /// The returned bool reports the nested-ON verdict that the create path
 /// threads into `SandboxBuilder::nested_virt(...)` (the fork's first-class
@@ -1935,20 +1935,20 @@ mod tests {
             .unwrap_or_else(|e| panic!("prefer never refuses: {e}"));
     }
 
-    /// A home-final seal refuses even on a full host, citing the seal.
+    /// A config-final seal refuses even on a full host, citing the seal.
     #[test]
     fn nested_gate_seal_refuses_on_full_host() {
         use crate::config::NestedMode;
         use crate::microsandbox::nested::NestedProbe;
         let sealed = NestedGateWorkload {
             ask: Some(NestedMode::Require),
-            frozen_by: Some("home-registry".to_string()),
+            frozen_by: Some("config-registry".to_string()),
         };
         let err = check_nested_up_gate(&sealed, &NestedProbe::full())
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("seal forbids it") && err.contains("home-registry"),
+            err.contains("seal forbids it") && err.contains("config-registry"),
             "seal refusal cites the seal: {err}"
         );
     }

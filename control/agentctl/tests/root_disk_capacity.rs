@@ -92,8 +92,8 @@ fn root_disk_capacity_is_visible_in_json_text_and_source_plans() {
         command
             .env_clear()
             .env("HOME", root.path().join("home"))
-            .env("WORKESTRATE_HOME", root.path().join("tool"))
-            .env("WORKESTRATE_CONFIG_DIR", &config_dir)
+            .env("WORKESTRATE_CONFIG", root.path().join("tool"))
+            .env("WORKESTRATE_FLEET_DIR", &config_dir)
             .env("WORKESTRATE_STATE_DIR", root.path().join("state"))
             .env("MSB_HOME", root.path().join("msb"))
             .env("MSB_CONFIG_PATH", &backend_config)

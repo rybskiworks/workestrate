@@ -68,7 +68,7 @@ impl Layer {
     }
 
     /// Load a layer from a TOML string, recording the on-disk file the
-    /// content came from (when there is one). Directory-mode config repos
+    /// content came from (when there is one). Directory-mode fleets
     /// (spec 17) load each pseudo-layer from a real file under
     /// `<repo>/workestrate/`, so they pass that path here; purely synthetic
     /// layers pass `None`.
@@ -274,7 +274,7 @@ pub fn get_provenance() -> Option<Provenance> {
 // single-file mode — see [`layer_dirs_from`]). Together they let repo-relative
 // mount and seed_file paths resolve against the DECLARING layer's content
 // root instead of the flake project root (spec 17 directory mode: config
-// content lives in config repos, not in the tool checkout). Same `Mutex`
+// content lives in fleets, not in the tool checkout). Same `Mutex`
 // rationale as the provenance stores above (tokio multi-thread task migration).
 
 /// Layer-name → content dir for the most recent config load.
@@ -354,7 +354,7 @@ pub fn get_secret_provenance() -> Option<Provenance> {
 // mirroring the mount-policy COLLECTED store (crate::mount_policy):
 // fragments are COLLECTED per scope, never merged (no policy field passes
 // through merge_layers), and the resolution walks them authority-ascending.
-// Rung 2 (home registry) + rung 3 (config-repo layers, stack order) are
+// Rung 2 (config registry) + rung 3 (fleet layers, stack order) are
 // global; rung 4 (workload capsule) is keyed by workload name. Rung 1
 // (built-in passthrough) and rung 5 (merged per-secret entries) are not
 // collected — they are constants of the resolution. Same Mutex rationale
@@ -362,11 +362,11 @@ pub fn get_secret_provenance() -> Option<Provenance> {
 
 /// The collected secret violation-policy ladder rungs (rungs 2-4). Each
 /// entry carries the ORIGIN label used in resolution provenance (the
-/// home-registry scope label, or the declaring layer's name).
+/// config-registry scope label, or the declaring layer's name).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SecretPolicyLadder {
-    /// Rung 2: the home registry's `[policy.secrets]` (operator scope).
-    pub home: Option<(String, SecretsPolicyFragment)>,
+    /// Rung 2: the config registry's `[policy.secrets]` (operator scope).
+    pub config: Option<(String, SecretsPolicyFragment)>,
     /// Rung 3: each layer's `[policy.secrets]` in loader stack order.
     pub layers: Vec<(String, SecretsPolicyFragment)>,
     /// Rung 4: workload capsule `[policy.secrets]` rungs per workload name,
@@ -400,24 +400,24 @@ pub fn get_secret_policy_ladder() -> Option<SecretPolicyLadder> {
 // rungs for the most recent config load, mirroring the secret-policy ladder:
 // fragments are COLLECTED per scope, never merged (no policy field passes
 // through merge_layers), and the resolution walks them authority-ascending.
-// Rung 1 is home-registry, rung 2 is config layers in stack order, rung 3 is
+// Rung 1 is config-registry, rung 2 is config layers in stack order, rung 3 is
 // workload capsule per workload name. Same Mutex rationale as above.
 
 /// The collected network policy ladder rungs (ADR 0035). Each entry carries
-/// the ORIGIN label used in resolution provenance (home-registry scope label,
+/// the ORIGIN label used in resolution provenance (config-registry scope label,
 /// or the declaring layer's name).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NetworkPolicyLadder {
-    /// Egress ladder: home, layers, workloads.
-    pub egress_home: Option<(String, EgressPolicyFragment)>,
+    /// Egress ladder: config, layers, workloads.
+    pub egress_config: Option<(String, EgressPolicyFragment)>,
     pub egress_layers: Vec<(String, EgressPolicyFragment)>,
     pub egress_workloads: HashMap<String, Vec<(String, EgressPolicyFragment)>>,
     /// Ingress ladder.
-    pub ingress_home: Option<(String, IngressPolicyFragment)>,
+    pub ingress_config: Option<(String, IngressPolicyFragment)>,
     pub ingress_layers: Vec<(String, IngressPolicyFragment)>,
     pub ingress_workloads: HashMap<String, Vec<(String, IngressPolicyFragment)>>,
     /// IDNA ladder.
-    pub idna_home: Option<(String, IdnaPolicyFragment)>,
+    pub idna_config: Option<(String, IdnaPolicyFragment)>,
     pub idna_layers: Vec<(String, IdnaPolicyFragment)>,
     pub idna_workloads: HashMap<String, Vec<(String, IdnaPolicyFragment)>>,
 }
@@ -448,7 +448,7 @@ pub fn get_network_policy_ladder() -> Option<NetworkPolicyLadder> {
 // config load, mirroring the secret-policy ladder: fragments are COLLECTED
 // per scope, never merged (no policy field passes through merge_layers),
 // and the resolution walks them authority-ascending. Rung 1 is
-// home-registry, rung 2 is config layers in stack order, rung 3 is workload
+// config-registry, rung 2 is config layers in stack order, rung 3 is workload
 // capsules (`[workloads.<name>.policy.virtualization]`) per workload name.
 // The workload's `[workloads.<name>.virtualization]` ASK is not a policy
 // fragment — it merges whole-unit in `merge_workload` and is resolved
@@ -457,11 +457,11 @@ pub fn get_network_policy_ladder() -> Option<NetworkPolicyLadder> {
 
 /// The collected nested-virtualization seal ladder rungs (ADR 0036). Each
 /// entry carries the ORIGIN label used in resolution provenance
-/// (home-registry scope label, or the declaring layer's name).
+/// (config-registry scope label, or the declaring layer's name).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VirtualizationLadder {
-    /// Rung 1: the home registry's `[policy.virtualization]` (operator scope).
-    pub home: Option<(String, VirtualizationPolicyFragment)>,
+    /// Rung 1: the config registry's `[policy.virtualization]` (operator scope).
+    pub config: Option<(String, VirtualizationPolicyFragment)>,
     /// Rung 2: each layer's `[policy.virtualization]` in loader stack order.
     pub layers: Vec<(String, VirtualizationPolicyFragment)>,
     /// Rung 3: workload capsule `[policy.virtualization]` rungs per workload
@@ -494,19 +494,19 @@ pub fn get_virtualization_ladder() -> Option<VirtualizationLadder> {
 // The collected `[policy.ssh]` fragments for the most recent config load,
 // mirroring the secret-policy ladder: fragments are COLLECTED per scope,
 // never merged (no policy field passes through merge_layers), and the
-// resolution walks them authority-ascending. Rung 1 is home-registry, rung 2
+// resolution walks them authority-ascending. Rung 1 is config-registry, rung 2
 // is config layers in stack order, rung 3 is workload capsules
 // (`[workloads.<name>.policy.ssh]`) per workload name — a bare
 // directory-mode capsule's top-level `[policy.ssh]` lands there via the
 // workload wrapper. Same Mutex rationale as above.
 
 /// The collected SSH confinement-policy ladder rungs. Each entry
-/// carries the ORIGIN label used in resolution provenance (home-registry
+/// carries the ORIGIN label used in resolution provenance (config-registry
 /// scope label, or the declaring layer's name).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SshPolicyLadder {
-    /// Rung 1: the home registry's `[policy.ssh]` (operator scope).
-    pub home: Option<(String, SshPolicyFragment)>,
+    /// Rung 1: the config registry's `[policy.ssh]` (operator scope).
+    pub config: Option<(String, SshPolicyFragment)>,
     /// Rung 2: each layer's `[policy.ssh]` in loader stack order.
     pub layers: Vec<(String, SshPolicyFragment)>,
     /// Rung 3: workload capsule `[policy.ssh]` rungs per workload name, in
@@ -960,7 +960,7 @@ fn merge_workload(
         // ADR 0036 §3: the virtualization ask is ONE unit — a higher layer
         // re-declaring [workloads.<name>.virtualization] replaces the WHOLE
         // table (last layer wins), the same whole-spec reset semantics the
-        // instance block applies. The home `[policy.virtualization]` seal is
+        // instance block applies. The config `[policy.virtualization]` seal is
         // NOT merged here — it is collected via the virtualization ladder.
         merged.virtualization = layer.virtualization.clone();
         provenance.insert(
@@ -972,7 +972,7 @@ fn merge_workload(
     if table.contains_key("network") {
         let raw_network = table.get("network").and_then(|v| v.as_table());
         // Explicit `defaults.{egress,ingress} = "allow"` stands alone: the
-        // winning (most-specific) layer wins; home `final` seals veto via
+        // winning (most-specific) layer wins; config `final` seals veto via
         // the policy ladder. Monotonic-deny-upward is gone by design
         // (2026-09-04, entitlements removal).
         merge_network(

@@ -17,10 +17,10 @@
 //!   operates on state-dir groups, not invocations — the capsule
 //!   `image.keep_last` rung is enforced at load time by prune-on-load).
 //!
-//! Cascade (first Some wins, scanning capsule → repo → settings → default):
-//! built-in [`DEFAULT_IMAGE_KEEP_LAST`] < home settings
-//! (`RegistrySettings.image_keep_last`) < config-repo entry
-//! (`ConfigRepoEntry.image_keep_last`) < workload capsule
+//! Cascade (first Some wins, scanning capsule → fleet → settings → default):
+//! built-in [`DEFAULT_IMAGE_KEEP_LAST`] < config settings
+//! (`RegistrySettings.image_keep_last`) < fleet entry
+//! (`FleetEntry.image_keep_last`) < workload capsule
 //! (`ImageSpec.keep_last`). ANY explicitly-provided `0` is a hard error
 //! ([`resolve_keep_last`]): N >= 1 because the just-loaded/current tag
 //! always counts toward N and is always retained.
@@ -51,8 +51,8 @@ use crate::images::pipeline::{ImageRemover, MsbCliRemover};
 use crate::images::state::{ImagesState, OUT_PATH_HASH_PREFIX_LEN, PointerRecord};
 
 /// Built-in keep-last-N default (ADR 0032 §Image tags — RESOLVED user
-/// decision 3): the lowest rung of the cascade, used when neither the home
-/// settings, the config-repo entry, nor the workload capsule configure N.
+/// decision 3): the lowest rung of the cascade, used when neither the config
+/// settings, the fleet entry, nor the workload capsule configure N.
 pub const DEFAULT_IMAGE_KEEP_LAST: u32 = 5;
 
 /// The cascade resolver (ADR 0032 §Image tags — RESOLVED user decision 3;
@@ -66,7 +66,7 @@ pub fn resolve_keep_last(
     capsule: Option<u32>,
 ) -> Result<u32> {
     const CAPSULE_LOCUS: &str = "workloads.<name>.image.keep_last (workload capsule)";
-    const REPO_LOCUS: &str = "configs[<repo>].image_keep_last (config-repo entry)";
+    const REPO_LOCUS: &str = "configs[<repo>].image_keep_last (fleet entry)";
     const SETTINGS_LOCUS: &str = "settings.image_keep_last (registry [settings])";
     for (value, locus) in [
         (capsule, CAPSULE_LOCUS),
@@ -642,7 +642,7 @@ pub async fn cmd_images_gc(json: bool) -> Result<()> {
     let settings_keep_last = registry.as_ref().and_then(|r| r.settings.image_keep_last);
     let repo_keep_last: BTreeMap<String, u32> = registry
         .map(|r| {
-            r.configs
+            r.fleets
                 .into_iter()
                 .filter_map(|(name, entry)| entry.image_keep_last.map(|v| (name, v)))
                 .collect()

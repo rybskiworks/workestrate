@@ -1,11 +1,11 @@
-# Copier template for a new workestrate config repo.
-# Usage: copier copy templates/workestrate-config/ my-config-repo/
+# Copier template for a new workestrate fleet.
+# Usage: copier copy templates/workestrate-config/ my-fleet/
 #
-# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrate-config/ my-config-repo/
+# Or from a remote: copier copy github:georgrybski/ai-workbench/templates/workestrate-config/ my-fleet/
 
 config_name:
   type: str
-  help: "Name for this config repo (e.g. personal, work, team)"
+  help: "Name for this fleet (e.g. personal, work, team)"
   default: personal
 
 age_recipient:

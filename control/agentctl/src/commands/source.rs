@@ -21,7 +21,7 @@ pub async fn cmd_source(action: SourceAction) -> Result<()> {
 }
 
 /// A `flake://` source resolved to a concrete clone URL + pinned revision
-/// from the declaring config repo's `flake.lock`.
+/// from the declaring fleet's `flake.lock`.
 struct LockedSource {
     clone_url: String,
     rev: String,
@@ -98,14 +98,14 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
                         git_clone_full(&locked.clone_url, &dest)?;
                         git_checkout_rev(&dest, &locked.rev)?;
                         println!(
-                            "Materialized flake://{input} source at rev {} from the config repo's flake.lock to {}",
+                            "Materialized flake://{input} source at rev {} from the fleet's flake.lock to {}",
                             locked.rev,
                             dest.display()
                         );
                     }
                     None => {
                         println!(
-                            "flake://{input} is declared by the config repo at {} but its flake.lock has no github/git lock node for input '{}'.",
+                            "flake://{input} is declared by the fleet at {} but its flake.lock has no github/git lock node for input '{}'.",
                             root.display(),
                             input
                         );
@@ -118,12 +118,12 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
                 },
                 None => {
                     println!(
-                        "The config repo declaring workload '{}' (source dir: {}) has no flake.nix.",
+                        "The fleet declaring workload '{}' (source dir: {}) has no flake.nix.",
                         name,
                         content_dir.display()
                     );
                     println!(
-                        "To use this flake:// source, add a flake.nix to that config repo declaring an input named '{}', then materialize it with: nix develop <config-repo-root>",
+                        "To use this flake:// source, add a flake.nix to that fleet declaring an input named '{}', then materialize it with: nix develop <fleet-root>",
                         input
                     );
                     println!("Or clone manually to: {}", dest.display());
@@ -131,11 +131,11 @@ pub fn cmd_source_clone(name: &str, path: Option<&str>) -> Result<()> {
             },
             None => {
                 println!(
-                    "Could not resolve the config repo that declares workload '{}' (no provenance/layer-dir information available).",
+                    "Could not resolve the fleet that declares workload '{}' (no provenance/layer-dir information available).",
                     name
                 );
                 println!(
-                    "flake:// sources are materialized by the declaring config repo's flake: run 'nix develop <config-repo-root>' in the repo whose flake.nix declares an input named '{}', or clone manually to: {}",
+                    "flake:// sources are materialized by the declaring fleet's flake: run 'nix develop <fleet-root>' in the repo whose flake.nix declares an input named '{}', or clone manually to: {}",
                     input,
                     dest.display()
                 );
@@ -171,11 +171,11 @@ pub fn find_flake_root(start: &Path) -> Option<PathBuf> {
 /// env var is set AND it contains a `flake.nix`. Returns `None` otherwise —
 /// a set-but-flakeless `AGENTCTL_ROOT` is NOT an error here; it just does
 /// not participate in declaring-repo-derived resolution (the F2 gate falls
-/// through to the declaring repo / legacy `project_root()` tiers).
+/// through to the declaring fleet / legacy `project_root()` tiers).
 ///
 /// This isolates the explicit-override tier from `project_root_optional`'s
-/// fold (which would let the CWD tier win before the declaring repo is
-/// tried) — the F2 gate's tier order is: AGENTCTL_ROOT → declaring repo →
+/// fold (which would let the CWD tier win before the declaring fleet is
+/// tried) — the F2 gate's tier order is: AGENTCTL_ROOT → declaring fleet →
 /// legacy CWD gate (see `microsandbox/mounts.rs` `resolve_mount_roots_owned`).
 pub fn flake_root_override() -> Option<PathBuf> {
     let root = std::env::var("AGENTCTL_ROOT").ok().map(PathBuf::from)?;
@@ -193,7 +193,7 @@ pub fn flake_root_override() -> Option<PathBuf> {
 /// Provenance keys are dot-paths (`workloads.<name>.local_build`; the merge
 /// engine records local_build wholesale, so the `.source` sub-key is probed
 /// first only for forward compatibility). Values are layer names; for
-/// directory-mode config repos the layer name is `<repo>#<relpath>` and the
+/// directory-mode fleets the layer name is `<repo>#<relpath>` and the
 /// map preserves its immediate source directory for workload-local flakes.
 fn declaring_layer_content_dir_from(
     provenance: &Provenance,
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(env_var, "WORKESTRATE_MY_AGENT_BUILD");
     }
 
-    // --- flake:// config-repo flake-root resolution -------------------------
+    // --- flake:// fleet flake-root resolution -------------------------
 
     /// Unique temp dir per test invocation (same pattern as the integration
     /// tests; no tempfile dep).
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn find_flake_root_prefers_nearest_ancestor() {
         let outer = uniq_dir("flake-outer");
-        let inner = outer.join("config-repo");
+        let inner = outer.join("fleet");
         let nested = inner.join("workestrate");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(outer.join("flake.nix"), "{}\n").unwrap();

@@ -93,11 +93,11 @@ fn gate_cmd(home: &Path, config_dir: &Path, cwd: &Path) -> Command {
     c.env("XDG_DATA_HOME", home.join(".local").join("share"));
     c.env("XDG_STATE_HOME", home.join(".local").join("state"));
     c.env("MSB_HOME", home.join("msb-home"));
-    c.env("WORKESTRATE_CONFIG_DIR", config_dir);
+    c.env("WORKESTRATE_FLEET_DIR", config_dir);
     c.env_remove("WORKESTRATE_STATE_DIR");
     c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
     c.env_remove("WORKESTRATE_CONTEXT");
-    c.env_remove("WORKESTRATE_HOME");
+    c.env_remove("WORKESTRATE_CONFIG");
     c.env_remove("AGENTCTL_ROOT");
     c.env_remove("CARGO_MANIFEST_DIR");
     c
@@ -197,7 +197,7 @@ fn nix_layered_up_without_declaring_flake_fails_at_ensure() {
         "the §7 missing-flake hard error; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("add a flake.nix to the config repo"),
+        stderr.contains("add a flake.nix to the fleet"),
         "remediation wording; stderr:\n{stderr}"
     );
 }

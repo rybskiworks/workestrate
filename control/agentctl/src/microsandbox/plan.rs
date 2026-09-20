@@ -128,7 +128,7 @@ pub struct VirtualizationPlan {
     /// `prefer` (or a soft-gapped `require`) running without the device.
     #[serde(default)]
     pub degraded: bool,
-    /// A home-final seal denied the ask (plan reports, up refuses).
+    /// A config-final seal denied the ask (plan reports, up refuses).
     #[serde(default)]
     pub frozen_out: bool,
     /// Origin label of the denying/sealing rung, when frozen out.
@@ -903,7 +903,7 @@ impl fmt::Display for SandboxPlan {
         // (provenance frozen_out/frozen_by, same model as secrets/mount/
         // virt) so the review surface shows WHY the default stayed deny.
         if let Some(seal) = &self.network.egress_defaults_seal {
-            let sealed_by = seal.frozen_by.as_deref().unwrap_or("home");
+            let sealed_by = seal.frozen_by.as_deref().unwrap_or("config-registry");
             writeln!(
                 f,
                 "NOTE: workload '{}' [network.defaults] egress=allow frozen_out by {} (sealed; egress_default stays deny)",
@@ -911,7 +911,7 @@ impl fmt::Display for SandboxPlan {
             )?;
         }
         if let Some(seal) = &self.network.ingress_defaults_seal {
-            let sealed_by = seal.frozen_by.as_deref().unwrap_or("home");
+            let sealed_by = seal.frozen_by.as_deref().unwrap_or("config-registry");
             writeln!(
                 f,
                 "NOTE: workload '{}' [network.defaults] ingress=allow frozen_out by {} (sealed; ingress_default stays deny)",
@@ -919,7 +919,7 @@ impl fmt::Display for SandboxPlan {
             )?;
         }
         // Entitlements removed 2026-09-04: a relaxed default has no gate
-        // beyond the explicit declaration — and home `final` seals DO veto
+        // beyond the explicit declaration — and config `final` seals DO veto
         // (E1: the flip rides the ladder freeze walk as a synthetic lowest-
         // rung allow-all; sealed renders the FROZEN line above and the
         // relaxed NOTE below stays off), so `plan` renders a loud
@@ -1006,7 +1006,7 @@ impl fmt::Display for SandboxPlan {
         if let Some(virt) = &self.virtualization {
             let mut line = format!("virtualization: nested={}", virt.nested);
             if virt.frozen_out {
-                let sealed_by = virt.frozen_by.as_deref().unwrap_or("home");
+                let sealed_by = virt.frozen_by.as_deref().unwrap_or("config-registry");
                 line.push_str(&format!(" (frozen_out by {sealed_by}; up will refuse)"));
             } else if virt.degraded {
                 line.push_str(" (degraded: host lacks nested KVM; running without /dev/kvm)");
@@ -1898,12 +1898,12 @@ network: egress_default=deny ingress_default=deny
             nested: crate::config::NestedMode::Require,
             degraded: false,
             frozen_out: true,
-            frozen_by: Some("home-registry".to_string()),
+            frozen_by: Some("config-registry".to_string()),
             origin: "personal".to_string(),
         });
         let rendered = format!("{plan}");
         assert!(
-            rendered.contains("virtualization: nested=require (frozen_out by home-registry;"),
+            rendered.contains("virtualization: nested=require (frozen_out by config-registry;"),
             "frozen line: {rendered}"
         );
     }
@@ -1950,12 +1950,12 @@ network: egress_default=deny ingress_default=deny
         let mut plan = base();
         plan.network.egress_defaults_seal = Some(DefaultsSeal {
             frozen_out: true,
-            frozen_by: Some("home-registry".to_string()),
+            frozen_by: Some("config-registry".to_string()),
         });
         let rendered = format!("{plan}");
         assert!(
             rendered.contains(
-                "NOTE: workload 'pi' [network.defaults] egress=allow frozen_out by home-registry"
+                "NOTE: workload 'pi' [network.defaults] egress=allow frozen_out by config-registry"
             ),
             "egress frozen line: {rendered}"
         );
@@ -1963,12 +1963,12 @@ network: egress_default=deny ingress_default=deny
         let mut plan = base();
         plan.network.ingress_defaults_seal = Some(DefaultsSeal {
             frozen_out: true,
-            frozen_by: Some("home-registry".to_string()),
+            frozen_by: Some("config-registry".to_string()),
         });
         let rendered = format!("{plan}");
         assert!(
             rendered.contains(
-                "NOTE: workload 'pi' [network.defaults] ingress=allow frozen_out by home-registry"
+                "NOTE: workload 'pi' [network.defaults] ingress=allow frozen_out by config-registry"
             ),
             "ingress frozen line: {rendered}"
         );

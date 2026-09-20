@@ -108,7 +108,7 @@ check is independent of interactive development setup.
 `just verify` builds the sandboxed checks directly, without entering devenv or
 reading consumer homes. Its schema-copy check compares only repository-owned
 template files; deployed consumers can be inspected separately with
-`workestrate --home <tool-home> schemas update --check`. The store audit is
+`workestrate --config <config> schemas update --check`. The store audit is
 informational and requests closure sizes explicitly.
 
 `nix run .#install-hooks` explicitly installs the flake-managed Git hooks

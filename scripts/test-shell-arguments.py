@@ -152,18 +152,18 @@ class ShellArgumentsTest(unittest.TestCase):
         # verbatim, and a bare invocation gains `init` while staying literal
         # (no shell expansion of metacharacters).
         hoist_cases = (
-            (["--home", str(self.outer / "operator home"), "--config", "personal", "update"],
-             ["secrets", "update", "--home", str(self.outer / "operator home"), "--config", "personal"]),
-            (["update", "--home", str(self.outer / "operator home"), "--config", "personal"],
-             ["secrets", "update", "--home", str(self.outer / "operator home"), "--config", "personal"]),
-            (["--config", "personal", "update"], ["secrets", "update", "--config", "personal"]),
+            (["--config", str(self.outer / "operator config"), "--fleet", "personal", "update"],
+             ["secrets", "update", "--config", str(self.outer / "operator config"), "--fleet", "personal"]),
+            (["update", "--config", str(self.outer / "operator config"), "--fleet", "personal"],
+             ["secrets", "update", "--config", str(self.outer / "operator config"), "--fleet", "personal"]),
+            (["--fleet", "personal", "update"], ["secrets", "update", "--fleet", "personal"]),
             (["--config=personal", "update"], ["secrets", "update", "--config=personal"]),
             (["update", "--config=personal"], ["secrets", "update", "--config=personal"]),
-            (["--config", "init"], ["secrets", "init", "--config", "init"]),
+            (["--fleet", "init"], ["secrets", "init", "--fleet", "init"]),
             (["--config=init"], ["secrets", "init", "--config=init"]),
-            (["--config-dir", "update"], ["secrets", "init", "--config-dir", "update"]),
-            (["--home", "init"], ["secrets", "init", "--home", "init"]),
-            (["--config", "personal"], ["secrets", "init", "--config", "personal"]),
+            (["--fleet-dir", "update"], ["secrets", "init", "--fleet-dir", "update"]),
+            (["--config", "init"], ["secrets", "init", "--config", "init"]),
+            (["--fleet", "personal"], ["secrets", "init", "--fleet", "personal"]),
             ([], ["secrets", "init"]),
             (["--global"], ["secrets", "init", "--global"]),
             (["init", "--global"], ["secrets", "init", "--global"]),
@@ -172,8 +172,8 @@ class ShellArgumentsTest(unittest.TestCase):
             (["-h"], ["secrets", "-h"]),
             ([f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
              ["secrets", "update", f"$(touch {shlex.quote(str(marker))}); `false`"]),
-            (["--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
-             ["secrets", "update", "--config-dir", f"$(touch {shlex.quote(str(marker))}); `false`"]),
+            (["--fleet-dir", f"$(touch {shlex.quote(str(marker))}); `false`", "update"],
+             ["secrets", "update", "--fleet-dir", f"$(touch {shlex.quote(str(marker))}); `false`"]),
         )
         for arguments, expected in hoist_cases:
             with self.subTest(arguments=arguments):
@@ -187,7 +187,7 @@ class ShellArgumentsTest(unittest.TestCase):
                 self.assertFalse(marker.exists())
                 self.assertFalse((self.root / "nix-argv.json").exists(), "recipe must not enter nix")
         # A missing option value errors before delegating to the CLI.
-        for arguments in (["--config"], ["--config-dir"], ["--home"]):
+        for arguments in (["--fleet"], ["--fleet-dir"], ["--config"]):
             with self.subTest(arguments=arguments):
                 before = (self.root / "cli-argv.json").read_text() if (self.root / "cli-argv.json").exists() else None
                 result = subprocess.run(
@@ -200,7 +200,7 @@ class ShellArgumentsTest(unittest.TestCase):
                 after = (self.root / "cli-argv.json").read_text() if (self.root / "cli-argv.json").exists() else None
                 self.assertEqual(after, before, "missing option value must not reach the CLI")
         result = subprocess.run(
-            [str(self.bin / "just"), "setup-secrets", "--config", "personal", "update"],
+            [str(self.bin / "just"), "setup-secrets", "--fleet", "personal", "update"],
             cwd=self.root, env={**env, "CLI_EXIT_CODE": "23"},
             text=True, capture_output=True, timeout=10,
         )

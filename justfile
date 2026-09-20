@@ -241,7 +241,7 @@ _golden-check-inner:
 
 # Regenerate the canonical JSON Schemas for workestrate.toml from the
 # schemars-derived ConfigFile, plus the bare-workload subschema derived from
-# WorkloadConfig, plus the tool-home registry schema derived from Registry.
+# WorkloadConfig, plus the config registry schema derived from Registry.
 # Writes to schemas/workestrate.schema.json,
 # schemas/workestrate-workload.schema.json, and schemas/registry.schema.json.
 # Run on a nix-capable host (the
@@ -250,8 +250,8 @@ _golden-check-inner:
 # After regenerating, run `just schema-sync-check` (CI gate; exits 1 when a
 # consumer copy is stale) and `workestrate schemas update` to distribute all
 # three artifacts (full + workload subschema + registry schema) to the copier template
-# (templates/workestrate-config/schemas/), tool home (schemas/), and each
-# registered config repo that carries a schemas/ dir.
+# (templates/workestrate-config/schemas/), config (schemas/), and each
+# registered fleet that carries a schemas/ dir.
 generate-schema:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -291,7 +291,7 @@ _schema-check-inner:
     cargo test --manifest-path control/agentctl/Cargo.toml --test schema_subschema_drift
 
 # CI drift guard for the consumer schema copies (schemas/ at templates/,
-# tool home, and registered config repos). Exits 1 when any consumer copy
+# config, and registered fleets). Exits 1 when any consumer copy
 # is stale or missing; run `workestrate schemas update` to refresh.
 schema-sync-check:
     @just _schema-sync-check-inner
@@ -509,8 +509,8 @@ provision-check:
 # delegates to the CLI: the nix-installed workestrate wrapper bundles sops
 # and age, so no devshell is needed). Kept for muscle memory; prefer
 # `workestrate secrets <init|update> ...` directly. Accepts the historical
-# argument shapes (init/update before or after the --config/--config-dir/
-# flags; --home anywhere) and hoists the verb in front of the
+# argument shapes (init/update before or after the --config/--fleet/
+# flags; --config anywhere) and hoists the verb in front of the
 # target-selector flags; a bare invocation defaults to `init`.
 [positional-arguments]
 setup-secrets *args:
@@ -519,13 +519,13 @@ setup-secrets *args:
     action=""
     rest=()
     saw_help=0
-    # Consume --config/--config-dir/--home together with their value (both
+    # Consume --config/--fleet/--fleet-dir together with their value (both
     # `--opt value` and `--opt=value` forms) so a value named init/update
     # is never mistaken for the verb; a missing value errors out before
     # delegating to the CLI.
     while [ $# -gt 0 ]; do
       case "$1" in
-        --config|--config-dir|--home)
+        --config|--fleet|--fleet-dir)
           opt="$1"
           if [ $# -lt 2 ]; then
             echo "[setup-secrets] ERROR: $opt requires a value" >&2
@@ -534,7 +534,7 @@ setup-secrets *args:
           rest+=("$1" "$2")
           shift 2
           ;;
-        --config=*|--config-dir=*|--home=*)
+        --config=*|--fleet=*|--fleet-dir=*)
           rest+=("$1")
           shift
           ;;

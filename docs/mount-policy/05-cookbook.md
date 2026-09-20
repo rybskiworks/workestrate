@@ -13,7 +13,7 @@
 template.
 
 ```toml
-# any scope — e.g. a config-repo layer
+# any scope — e.g. a fleet layer
 [policy.mounts.read]
 deny = ["**/.env", "**/.env.*", "**/.ssh/**", "**/*.pem", "**/*.key"]
 allow = ["**/.env.example"]
@@ -60,7 +60,7 @@ safe: it compiles, validates, and shows in `explain`/`preview`.
 workload layer can ever reopen it.
 
 ```toml
-# OPERATOR scope only: home registry config.toml or overrides.toml
+# OPERATOR scope only: config registry config.toml or overrides.toml
 [policy.mounts.read]
 deny = [{ pattern = "**/agent/auth.json", final = true }]
 ```
@@ -75,13 +75,13 @@ declaration in a repo/workload scope compiles to a visibility-only terminal
 Mask rule (still adoptable). See the routing table in
 [03-hierarchy-and-precedence.md](./03-hierarchy-and-precedence.md).
 
-## Recipe 4: org-wide .env seal from the home registry
+## Recipe 4: org-wide .env seal from the config registry
 
 **Goal:** every workload on this machine hides `.env` files, as operator
 policy rather than per-repo convention.
 
 ```toml
-# home registry config.toml (operator scope)
+# config registry config.toml (operator scope)
 [policy.mounts.read]
 deny = ["**/.env", "**/.env.*"]
 ```
@@ -89,7 +89,7 @@ deny = ["**/.env", "**/.env.*"]
 **What the guest sees:** identical to recipe 1's deny behavior, for every
 workload, without any repo cooperation.
 
-**Caveats:** these entries are non-final, so a config-repo or workload layer
+**Caveats:** these entries are non-final, so a fleet or workload layer
 can still carve out a specific file with `read.allow` (e.g. a demo fixture).
 If you want the seal to be unrelaxable, make the entries final — which, from
 an operator scope, promotes them to the protect tier (recipe 3 semantics).

@@ -146,7 +146,7 @@ the lock before citing, pins move with deliberate updates):
 
 There are NO `pi`/`odysseus` flake inputs in this repo. `agents/<name>/repo`
 directories are optional gitignored local overrides (`workestrate check`
-reports them `[MISSING]`); agent sources are pinned in the config repos' own
+reports them `[MISSING]`); agent sources are pinned in the fleets' own
 flakes, not here.
 
 Update the lock only deliberately:
@@ -187,7 +187,7 @@ CI should NOT run `nix flake update`.
 
   > **Confirmed:** `just gc` runs `nix-collect-garbage --delete-old` + `nix store optimise`; `just store-audit` reports the top-20 store paths by size and flags `*-source` paths referencing `ai-workbench`.
 
-- **Relocation paths.** `CARGO_TARGET_DIR` is relocated out of the flake-visible source tree to `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (set by the devshell shellHook and the top-level justfile). The relocation of `agents/<name>/build` outputs into the managed sources store (`~/.local/share/workestrate/sources/<name>/`) is **deferred** (needs config-repo changes; see `docs/migration/70-open-items.md`). Until then, `agents/<name>/build` remains the sanctioned in-tree dev zone, excluded from the flake source closure by `.gitignore` and the `agentctl.nix` `cleanSourceWith` filter.
+- **Relocation paths.** `CARGO_TARGET_DIR` is relocated out of the flake-visible source tree to `${XDG_CACHE_HOME:-$HOME/.cache}/ai-workbench/agentctl-target` (set by the devshell shellHook and the top-level justfile). The relocation of `agents/<name>/build` outputs into the managed sources store (`~/.local/share/workestrate/sources/<name>/`) is **deferred** (needs fleet changes; see `docs/migration/70-open-items.md`). Until then, `agents/<name>/build` remains the sanctioned in-tree dev zone, excluded from the flake source closure by `.gitignore` and the `agentctl.nix` `cleanSourceWith` filter.
 
 - **The guard.** `just lint-nix` (backed by `scripts/check-nix-paths.sh`)
   is the ACTIVE gate wired into `just verify`. It catches `--impure`

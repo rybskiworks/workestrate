@@ -1,5 +1,5 @@
-//! `workestrate migrate-home` (ADR 0023): consolidate legacy layouts into a
-//! single tool home.
+//! `workestrate migrate-config` (ADR 0023): consolidate legacy layouts into a
+//! single config.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 use crate::config::paths::{xdg_config_dir, xdg_data_dir, xdg_state_dir};
 use crate::config::types::Registry;
 
-/// One moved file/dir recorded by [`run_migrate_home`].
+/// One moved file/dir recorded by [`run_migrate_config`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MovedEntry {
     pub src: String,
     pub dst: String,
 }
 
-/// Structured summary of a `workestrate migrate-home` run (ADR 0023).
+/// Structured summary of a `workestrate migrate-config` run (ADR 0023).
 ///
 /// The migration is **non-transactional**: if a move fails mid-loop, the
 /// entries already moved are not rolled back. In that case `partial` is
@@ -28,9 +28,9 @@ pub struct MigrateSummary {
     pub dry_run: bool,
     pub moved: Vec<MovedEntry>,
     pub registry_updated: bool,
-    pub home_version: Option<u32>,
+    pub config_version: Option<u32>,
     /// Names of `configs.<name>` entries whose local `url` pointed into the
-    /// old layout and was rewritten to the new `config-repos/<name>` path.
+    /// old layout and was rewritten to the new `fleets/<name>` path.
     /// Empty in
     /// dry-run (no editing happens) and when no local urls matched.
     pub urls_rewritten: Vec<String>,
@@ -57,7 +57,7 @@ struct MigrateSources {
     cleanup_dirs: Vec<PathBuf>,
 }
 
-/// Resolve the source layout. `dest` is the destination single-home dir.
+/// Resolve the source layout. `dest` is the destination single-config dir.
 ///
 /// - `from == "xdg"`: legacy `XDG_*_HOME` dirs.
 /// - `from == "bundle"`: the old `.workestrate/{config,data,state}/workestrate/`
@@ -176,7 +176,7 @@ fn plan_moves(sources: &MigrateSources, dest: &Path) -> Vec<(PathBuf, PathBuf)> 
         for entry in entries.flatten() {
             let name = entry.file_name();
             let p = entry.path();
-            moves.push((p, dest.join("config-repos").join(name)));
+            moves.push((p, dest.join("fleets").join(name)));
         }
     }
     if sources.sources_root.is_dir()
@@ -219,7 +219,7 @@ fn detect_layout() -> &'static str {
 }
 
 /// Detect whether a string looks like a remote URL (carries a scheme) rather
-/// than a local filesystem path. Used by [`run_migrate_home`] to avoid
+/// than a local filesystem path. Used by [`run_migrate_config`] to avoid
 /// rewriting genuine remote git urls stored in `configs.<name>.url`.
 ///
 /// Returns `true` for `http://`, `https://`, `ssh://`, `git@`, `flake://`, or
@@ -233,14 +233,14 @@ fn looks_like_remote_url(s: &str) -> bool {
         || s.contains("://")
 }
 
-/// Run a `workestrate migrate-home` consolidation into a single home (ADR 0023).
+/// Run a `workestrate migrate-config` consolidation into a single home (ADR 0023).
 ///
 /// `from` is `"xdg"`, `"bundle"`, or `None` (auto-detect). `dest` is the
-/// destination single-home dir. In dry-run mode nothing is moved; the returned
+/// destination single-config dir. In dry-run mode nothing is moved; the returned
 /// [`MigrateSummary`] lists the planned moves. On a real run the registry at
-/// `dest/config.toml` has `store_dir`/`state_dir` cleared and `home_version`
+/// `dest/config.toml` has `store_dir`/`state_dir` cleared and `config_version`
 /// set to `Some(2)`.
-pub fn run_migrate_home(
+pub fn run_migrate_config(
     from: Option<&str>,
     dest: &Path,
     dry_run: bool,
@@ -267,14 +267,14 @@ pub fn run_migrate_home(
             dry_run: true,
             moved,
             registry_updated: false,
-            home_version: None,
+            config_version: None,
             urls_rewritten: Vec::new(),
             partial: false,
             failed_at: None,
         });
     }
 
-    // Refuse to clobber an existing home unless --force.
+    // Refuse to clobber an existing config unless --force.
     if dest.join("config.toml").exists() && !force {
         anyhow::bail!(
             "destination {} already contains config.toml; pass --force to overwrite",
@@ -283,7 +283,7 @@ pub fn run_migrate_home(
     }
 
     // Clobber guard: scan ALL planned dst paths (overrides.toml,
-    // secrets/.env.local.enc, every config-repos/<name>, sources/<name>,
+    // secrets/.env.local.enc, every fleets/<name>, sources/<name>,
     // state/<name>). The config.toml primary check above is the fast-path
     // refusal; this catches every other pre-existing destination. --force
     // overrides.
@@ -310,7 +310,7 @@ pub fn run_migrate_home(
     std::fs::create_dir_all(dest)?;
     std::fs::create_dir_all(dest.join("secrets"))?;
     std::fs::create_dir_all(dest.join("state"))?;
-    std::fs::create_dir_all(dest.join("config-repos"))?;
+    std::fs::create_dir_all(dest.join("fleets"))?;
     std::fs::create_dir_all(dest.join("sources"))?;
 
     // Pre-flight: verify every src exists and every dst parent is writable
@@ -356,7 +356,7 @@ pub fn run_migrate_home(
             let moved_so_far = moved.len();
             let remaining = planned.len() - moved_so_far - 1;
             eprintln!(
-                "warning: migrate-home failed moving {} -> {}: {} \
+                "warning: migrate-config failed moving {} -> {}: {} \
                  (moved {} entr{}, {} remaining, non-transactional)",
                 src.display(),
                 dst.display(),
@@ -371,7 +371,7 @@ pub fn run_migrate_home(
                 dry_run: false,
                 moved,
                 registry_updated: false,
-                home_version: None,
+                config_version: None,
                 urls_rewritten: Vec::new(),
                 partial: true,
                 failed_at: Some(dst.display().to_string()),
@@ -384,9 +384,9 @@ pub fn run_migrate_home(
     }
 
     // Update the relocated registry: drop store_dir/state_dir (derivation from
-    // the new home takes over) and stamp home_version = 2.
+    // the new config takes over) and stamp config_version = 2.
     let mut registry_updated = false;
-    let mut home_version = None;
+    let mut config_version = None;
     let mut urls_rewritten: Vec<String> = Vec::new();
     let reg_path = dest.join("config.toml");
     if reg_path.exists()
@@ -396,15 +396,15 @@ pub fn run_migrate_home(
     {
         reg.settings.store_dir = None;
         reg.settings.state_dir = None;
-        reg.settings.home_version = Some(2);
+        reg.settings.config_version = Some(2);
 
         // Rewrite `configs.<name>.url` fields that still point into the
         // OLD layout that was just migrated. Only local filesystem paths
         // are considered (remote URLs are left untouched). A url matches
         // when it equals, or lives under, the old repo base
         // `sources.repos_root/<name>`; it is then rewritten to the new
-        // `dest/config-repos/<name>` path.
-        for (name, entry) in reg.configs.iter_mut() {
+        // `dest/fleets/<name>` path.
+        for (name, entry) in reg.fleets.iter_mut() {
             if looks_like_remote_url(&entry.url) {
                 continue;
             }
@@ -412,7 +412,7 @@ pub fn run_migrate_home(
             let old_base = sources.repos_root.join(name);
             // This site REWRITES urls from the old layout to the new one;
             // it does not resolve a checkout for reading, so
-            // `local_entry_checkout_dir` (home-relative resolution) does
+            // `local_entry_checkout_dir` (config-relative resolution) does
             // not apply here.
             // Prefer canonical comparison when both paths still resolve,
             // else fall back to lexical (component-wise) matching. In a
@@ -423,11 +423,7 @@ pub fn run_migrate_home(
                 _ => url_path == old_base || url_path.starts_with(&old_base),
             };
             if matches {
-                entry.url = dest
-                    .join("config-repos")
-                    .join(name)
-                    .to_string_lossy()
-                    .to_string();
+                entry.url = dest.join("fleets").join(name).to_string_lossy().to_string();
                 urls_rewritten.push(name.clone());
             }
         }
@@ -439,7 +435,7 @@ pub fn run_migrate_home(
             .map_err(|e| anyhow::anyhow!("failed to serialize migrated registry: {}", e))?;
         std::fs::write(&reg_path, toml_str)?;
         registry_updated = true;
-        home_version = Some(2);
+        config_version = Some(2);
     }
 
     // Best-effort cleanup of now-empty old subtrees (bundle in-place).
@@ -461,7 +457,7 @@ pub fn run_migrate_home(
         dry_run: false,
         moved,
         registry_updated,
-        home_version,
+        config_version,
         urls_rewritten,
         partial: false,
         failed_at: None,
@@ -480,10 +476,10 @@ pub(crate) mod tests {
     use super::*;
     use crate::config::test_support::*;
 
-    // ---- ADR 0023: migrate-home coverage ----
+    // ---- ADR 0023: migrate-config coverage ----
     //
-    // The resolve_home_* / discovery / xdg home-resolution tests moved to
-    // `config::paths::tests` (WP1-1 file split). The migrate-home family below
+    // The resolve_config_dir_* / discovery / xdg config-resolution tests moved to
+    // `config::paths::tests` (WP1-1 file split). The migrate-config family below
     // moved here with the migrate code (WP1-3 file split).
 
     /// Build a full legacy XDG layout under `root` and return the computed
@@ -523,16 +519,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_dry_run_xdg() -> Result<()> {
+    fn migrate_config_dry_run_xdg() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-dry");
         std::fs::create_dir_all(&root)?;
         let (xcfg, xdata, xstate) = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        let summary = run_migrate_home(Some("xdg"), &dest, true, false)?;
+        let summary = run_migrate_config(Some("xdg"), &dest, true, false)?;
         assert!(summary.dry_run);
         assert!(!summary.registry_updated);
         assert!(summary.moved.iter().any(|m| m.dst.ends_with("config.toml")));
@@ -552,7 +548,7 @@ pub(crate) mod tests {
             summary
                 .moved
                 .iter()
-                .any(|m| m.dst.ends_with("config-repos/personal"))
+                .any(|m| m.dst.ends_with("fleets/personal"))
         );
         assert!(summary.moved.iter().any(|m| m.dst.ends_with("sources/foo")));
         assert!(
@@ -579,26 +575,26 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_real_move_xdg() -> Result<()> {
+    fn migrate_config_real_move_xdg() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-real");
         std::fs::create_dir_all(&root)?;
         let (xcfg, xdata, _xstate) = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        let summary = run_migrate_home(Some("xdg"), &dest, false, false)?;
+        let summary = run_migrate_config(Some("xdg"), &dest, false, false)?;
         assert!(!summary.dry_run);
         assert!(summary.registry_updated);
-        assert_eq!(summary.home_version, Some(2));
+        assert_eq!(summary.config_version, Some(2));
 
-        // New single-home layout.
+        // New single-config layout.
         assert!(dest.join("config.toml").exists());
         assert!(dest.join("overrides.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
         assert!(
-            dest.join("config-repos")
+            dest.join("fleets")
                 .join("personal")
                 .join("file.txt")
                 .exists()
@@ -611,11 +607,11 @@ pub(crate) mod tests {
                 .exists()
         );
 
-        // Registry consolidated: store_dir cleared, home_version stamped.
+        // Registry consolidated: store_dir cleared, config_version stamped.
         let reg: Registry = toml::from_str(&std::fs::read_to_string(dest.join("config.toml"))?)?;
         assert_eq!(reg.settings.store_dir, None);
         assert_eq!(reg.settings.state_dir, None);
-        assert_eq!(reg.settings.home_version, Some(2));
+        assert_eq!(reg.settings.config_version, Some(2));
 
         // Old sources moved away.
         assert!(!xcfg.join("config.toml").exists());
@@ -633,9 +629,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_bundle_inplace() -> Result<()> {
+    fn migrate_config_bundle_inplace() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-bundle");
         let dest = root.join(".workestrate");
@@ -660,15 +656,15 @@ pub(crate) mod tests {
         std::fs::create_dir_all(bstate.join("workspaces"))?;
         std::fs::write(bstate.join("workspaces").join("ws.txt"), "ws")?;
 
-        let summary = run_migrate_home(Some("bundle"), &dest, false, false)?;
+        let summary = run_migrate_config(Some("bundle"), &dest, false, false)?;
         assert!(summary.registry_updated);
         assert_eq!(summary.from, "bundle");
 
-        // New single-home layout under dest.
+        // New single-config layout under dest.
         assert!(dest.join("config.toml").exists());
         assert!(dest.join("secrets").join(".env.local.enc").exists());
         assert!(
-            dest.join("config-repos")
+            dest.join("fleets")
                 .join("personal")
                 .join("file.txt")
                 .exists()
@@ -693,9 +689,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_rewrites_repo_url_pointing_into_old_layout() -> Result<()> {
+    fn migrate_config_rewrites_repo_url_pointing_into_old_layout() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-url");
         let dest = root.join(".workestrate");
@@ -717,12 +713,12 @@ pub(crate) mod tests {
         let old_url = old_repo.to_string_lossy().to_string();
         let toml_reg = format!(
             "[settings]\nstore_dir = \"/old\"\n\
-             [configs.personal]\nurl = \"{}\"\nref = \"main\"\n",
+             [fleets.personal]\nurl = \"{}\"\nref = \"main\"\n",
             old_url
         );
         std::fs::write(bcfg.join("config.toml"), toml_reg)?;
 
-        let summary = run_migrate_home(Some("bundle"), &dest, false, false)?;
+        let summary = run_migrate_config(Some("bundle"), &dest, false, false)?;
         assert!(summary.registry_updated);
         assert_eq!(summary.from, "bundle");
 
@@ -736,9 +732,9 @@ pub(crate) mod tests {
         // Reload the relocated registry and confirm the url was rewritten.
         let new_reg_text = std::fs::read_to_string(dest.join("config.toml"))?;
         let new_reg: Registry = toml::from_str(&new_reg_text)?;
-        let expected_new = dest.join("config-repos").join("personal");
+        let expected_new = dest.join("fleets").join("personal");
         let entry = new_reg
-            .configs
+            .fleets
             .get("personal")
             .ok_or_else(|| anyhow::anyhow!("personal config missing after migrate"))?;
         assert_eq!(
@@ -748,7 +744,7 @@ pub(crate) mod tests {
         );
         // store_dir cleared as before.
         assert_eq!(new_reg.settings.store_dir, None);
-        assert_eq!(new_reg.settings.home_version, Some(2));
+        assert_eq!(new_reg.settings.config_version, Some(2));
 
         // The repo itself landed at the new path.
         assert!(expected_new.join("file.txt").exists());
@@ -758,9 +754,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_refuses_when_dest_repo_pre_exists() -> Result<()> {
+    fn migrate_config_refuses_when_dest_repo_pre_exists() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-clobber");
         std::fs::create_dir_all(&root)?;
@@ -768,15 +764,15 @@ pub(crate) mod tests {
         let dest = root.join("dest");
 
         // Pre-create TWO dst paths that would be clobbered.
-        std::fs::create_dir_all(dest.join("config-repos").join("personal"))?;
+        std::fs::create_dir_all(dest.join("fleets").join("personal"))?;
         std::fs::write(
-            dest.join("config-repos").join("personal").join("stale.txt"),
+            dest.join("fleets").join("personal").join("stale.txt"),
             "stale",
         )?;
         std::fs::create_dir_all(dest.join("sources").join("foo"))?;
         std::fs::write(dest.join("sources").join("foo").join("stale.txt"), "stale")?;
 
-        let err = run_migrate_home(Some("xdg"), &dest, false, false).unwrap_err();
+        let err = run_migrate_config(Some("xdg"), &dest, false, false).unwrap_err();
         let msg = format!("{err:#}");
         eprintln!("TEST_A_REFUSAL_MSG:\n{msg}");
         assert!(
@@ -784,8 +780,8 @@ pub(crate) mod tests {
             "expected clobber refusal, got: {msg}"
         );
         assert!(
-            msg.contains("config-repos/personal"),
-            "expected existing dst config-repos/personal listed in refusal, got: {msg}"
+            msg.contains("fleets/personal"),
+            "expected existing dst fleets/personal listed in refusal, got: {msg}"
         );
         assert!(
             msg.contains("sources/foo"),
@@ -793,7 +789,7 @@ pub(crate) mod tests {
         );
         // The stale files must be untouched (refusal happens before any move).
         assert!(
-            dest.join("config-repos")
+            dest.join("fleets")
                 .join("personal")
                 .join("stale.txt")
                 .exists()
@@ -805,9 +801,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_force_overrides_clobber_guard() -> Result<()> {
+    fn migrate_config_force_overrides_clobber_guard() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-force");
         std::fs::create_dir_all(&root)?;
@@ -815,13 +811,13 @@ pub(crate) mod tests {
         let dest = root.join("dest");
 
         // Pre-create a dst repo dir that would be clobbered.
-        std::fs::create_dir_all(dest.join("config-repos").join("personal"))?;
+        std::fs::create_dir_all(dest.join("fleets").join("personal"))?;
         std::fs::write(
-            dest.join("config-repos").join("personal").join("stale.txt"),
+            dest.join("fleets").join("personal").join("stale.txt"),
             "stale",
         )?;
 
-        let summary = run_migrate_home(Some("xdg"), &dest, false, true)?;
+        let summary = run_migrate_config(Some("xdg"), &dest, false, true)?;
         assert!(
             !summary.partial,
             "force should complete without partial failure"
@@ -829,7 +825,7 @@ pub(crate) mod tests {
         assert!(summary.failed_at.is_none());
         // The moved repo content overwrites the stale file.
         assert!(
-            dest.join("config-repos")
+            dest.join("fleets")
                 .join("personal")
                 .join("file.txt")
                 .exists()
@@ -840,24 +836,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn migrate_home_partial_failure_reports_partial_and_failed_at() -> Result<()> {
+    fn migrate_config_partial_failure_reports_partial_and_failed_at() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-partial");
         std::fs::create_dir_all(&root)?;
         let _ = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        // Plant a regular FILE at dest/config-repos/personal where the src is
+        // Plant a regular FILE at dest/fleets/personal where the src is
         // a DIRECTORY. --force bypasses the clobber guard; the pre-flight
-        // passes (src exists, dst parent dest/config-repos/ is writable) but
-        // the actual move of the config-repos/personal dir onto a file path
+        // passes (src exists, dst parent dest/fleets/ is writable) but
+        // the actual move of the fleets/personal dir onto a file path
         // fails.
-        std::fs::create_dir_all(dest.join("config-repos"))?;
-        std::fs::write(dest.join("config-repos").join("personal"), "BLOCKER")?;
+        std::fs::create_dir_all(dest.join("fleets"))?;
+        std::fs::write(dest.join("fleets").join("personal"), "BLOCKER")?;
 
-        let summary = run_migrate_home(Some("xdg"), &dest, false, true)?;
+        let summary = run_migrate_config(Some("xdg"), &dest, false, true)?;
         eprintln!(
             "TEST_C_PARTIAL: partial={} failed_at={:?} moved_len={}",
             summary.partial,
@@ -877,7 +873,7 @@ pub(crate) mod tests {
             "expected failed_at to contain 'personal', got {:?}",
             summary.failed_at
         );
-        // Some entries before config-repos/personal should have moved
+        // Some entries before fleets/personal should have moved
         // (registry, overrides, secrets come first in plan_moves ordering).
         assert!(
             !summary.moved.is_empty(),
@@ -889,47 +885,47 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn home_version_defaults_to_absent() -> Result<()> {
+    fn config_version_defaults_to_absent() -> Result<()> {
         let toml_no_version = "[settings]\ndefault_context = \"personal\"\n";
         let reg: Registry = toml::from_str(toml_no_version)?;
-        assert_eq!(reg.settings.home_version, None);
+        assert_eq!(reg.settings.config_version, None);
         // Round-trip preserves absence.
         let round = toml::to_string(&reg)?;
         let reg2: Registry = toml::from_str(&round)?;
-        assert_eq!(reg2.settings.home_version, None);
+        assert_eq!(reg2.settings.config_version, None);
         Ok(())
     }
     #[cfg(unix)]
     #[test]
-    fn migrate_home_refuses_when_planned_dst_is_dangling_symlink() -> Result<()> {
+    fn migrate_config_refuses_when_planned_dst_is_dangling_symlink() -> Result<()> {
         // FN-11 regression: a DANGLING symlink at a planned dst must trip the
         // clobber guard. `dst.exists()` follows the link and returns false,
         // so the old guard missed it and rename(2) silently replaced the link.
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = uniq_dir("mig-dangling");
         std::fs::create_dir_all(&root)?;
         let _ = build_xdg_layout(&root)?;
         let dest = root.join("dest");
 
-        // Plant a dangling symlink where config-repos/personal is planned to
+        // Plant a dangling symlink where fleets/personal is planned to
         // land.
-        std::fs::create_dir_all(dest.join("config-repos"))?;
-        let dangling = dest.join("config-repos").join("personal");
+        std::fs::create_dir_all(dest.join("fleets"))?;
+        let dangling = dest.join("fleets").join("personal");
         std::os::unix::fs::symlink(root.join("nonexistent-target"), &dangling)?;
         // Precondition: the link is dangling (stat fails) but lstat sees it.
         assert!(!dangling.exists(), "test precondition: link must dangle");
         assert!(std::fs::symlink_metadata(&dangling).is_ok());
 
-        let err = run_migrate_home(Some("xdg"), &dest, false, false).unwrap_err();
+        let err = run_migrate_config(Some("xdg"), &dest, false, false).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("already contains"),
             "expected clobber refusal for the dangling symlink, got: {msg}"
         );
         assert!(
-            msg.contains("config-repos/personal"),
+            msg.contains("fleets/personal"),
             "expected the dangling dst listed in the refusal, got: {msg}"
         );
         // The dangling symlink must be untouched (refusal precedes any move).

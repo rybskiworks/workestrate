@@ -26,19 +26,19 @@ pub use loading::{
 };
 #[allow(unused_imports)]
 pub use lockfile::{
-    HomeLock, LOCK_FILE_NAME, LOCK_VERSION, LockedRef, LockedRepo, home_lock_path,
-    home_lock_path_for, load_home_lock, load_home_lock_from, lock_from_registry, save_home_lock,
-    save_home_lock_to, upsert_locked_pin, upsert_locked_ref,
+    ConfigLock, LOCK_FILE_NAME, LOCK_VERSION, LockedFleet, LockedRef, config_lock_path,
+    config_lock_path_for, load_config_lock, load_config_lock_from, lock_from_registry,
+    save_config_lock, save_config_lock_to, upsert_locked_pin, upsert_locked_ref,
 };
 #[allow(unused_imports)]
-pub use migration::{MigrateSummary, MovedEntry, run_migrate_home};
+pub use migration::{MigrateSummary, MovedEntry, run_migrate_config};
 #[allow(unused_imports)]
 pub use paths::expand_tilde;
 #[allow(unused_imports)]
 pub use paths::{
-    HomeKind, config_repo_dir, overrides_path, registry_path, resolve_active_config_dir,
-    resolve_home, resolve_home_with_kind, resolve_state_dir, resolve_store_dir, source_store_dir,
-    xdg_config_dir, xdg_data_dir, xdg_state_dir,
+    ConfigDirKind, fleet_dir, overrides_path, registry_path, resolve_active_fleet_dir,
+    resolve_config_dir, resolve_config_dir_with_kind, resolve_state_dir, resolve_store_dir,
+    source_store_dir, xdg_config_dir, xdg_data_dir, xdg_state_dir,
 };
 #[allow(unused_imports)]
 pub use paths::{
@@ -50,7 +50,7 @@ pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
     ConfigSourceKind, effective_ref, entry_is_local_path, load_registry, local_entry_checkout_dir,
-    register_config, resolve_active_context, resolve_default_ref, save_registry,
+    register_fleet, resolve_active_context, resolve_default_ref, save_registry,
     set_default_context, source_kind,
 };
 #[allow(unused_imports)]
@@ -59,10 +59,10 @@ pub use trust::is_dir_trusted_via_base_registry;
 pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
 pub use types::{
-    BakedFileSpec, BinarySpec, Bound, ConfigFile, ConfigRepoEntry, ConflictStep, Context,
-    CredentialsConfig, DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry,
-    EgressAllowTable, EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef,
-    EnvVarConfig, HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable,
+    BakedFileSpec, BinarySpec, Bound, ConfigFile, ConflictStep, Context, CredentialsConfig,
+    DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry, EgressAllowTable,
+    EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
+    FleetEntry, HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable,
     IngressDenyTable, IngressPolicyFragment, InitConfig, InstancePolicy, InstancePort,
     InstanceStrategy, LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig,
     OnConflict, OnSkew, PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain,
@@ -72,7 +72,7 @@ pub use types::{
     VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig, WorkloadCredentials,
 };
 #[allow(unused_imports)]
-pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_config_name};
+pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_fleet_name};
 
 use anyhow::Result;
 use std::path::PathBuf;

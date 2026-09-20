@@ -13,7 +13,7 @@ user's local checkout that overrides the canonical source).
 A user-cloned agent source checkout at a path different from the canonical
 flake input, selected via `WORKESTRATE_<NAME>_BUILD` env var (existing
 convention, `workload.rs:80-90`). Managed by `workestrate source
-clone/build/list/reset`. Stored at `$WORKESTRATE_HOME/sources/<name>/`.
+clone/build/list/reset`. Stored at `$WORKESTRATE_CONFIG/sources/<name>/`.
 
 **Recipe**
 A named, versioned, reviewable unit of executable logic in core that config
@@ -34,53 +34,53 @@ options), devcontainer features (install scripts owned by feature).
 A config source that participates in the merge order. Layers are ordered in
 the registry's `layers = [...]` array. Earlier layers are overridden by later
 ones (for non-security fields; security fields use security-aware merge, ADR
-0005). Layer sources: `config.reference/` (base), config repos (registry
+0005). Layer sources: `config.reference/` (base), fleets (registry
 layers), trusted project (`./workestrate.toml`), local
 (`./workestrate.local.toml`).
 
 **Context (deferred)**
-A named layer-set (kubectl-context style) that selects which config repos to
+A named layer-set (kubectl-context style) that selects which fleets to
 layer and in what order. **Deferred** until 3+ layers exist (ADR 0013). Phase
 3 ships a single ordered `layers` array; named contexts (`[[contexts.<name>]]`)
 are a future enhancement.
 
 **Registry**
-The user-level config file at `$WORKESTRATE_HOME/config.toml` that holds:
-tool settings, config-repo registry (name→url→ref→rev), ordered `layers` list,
+The user-level config file at `$WORKESTRATE_CONFIG/config.toml` that holds:
+tool settings, fleet registry (name→url→ref→rev), ordered `layers` list,
 and `[trusted_projects]`. Tracked in the user's dotfiles repo. This is the
-registry for config-repo references — where the homeless-registry recursion
+registry for fleet references — where the homeless-registry recursion
 terminates. Modeled on kubeconfig (`~/.kube/config` holds cluster references).
 
 **Config repo**
 A git repository containing deployment-specific configuration: `workestrate.toml`
 (workload definitions + secrets schema), `.env.enc` (SOPS-encrypted secrets),
 `.sops.yaml` (SOPS config), `infra/litellm/` (LiteLLM values), `agents/*/config/`
-(agent config files). Cloned to `$WORKESTRATE_HOME/config-repos/<name>/` by
+(agent config files). Cloned to `$WORKESTRATE_CONFIG/fleets/<name>/` by
 `workestrate config add`. May optionally have its own `flake.nix` (inverted
 dependency, Phase 2).
 
-**Home (WORKESTRATE_HOME)**
-The single tool home directory for workestrate. Default `~/.workestrate`.
+**Home (WORKESTRATE_CONFIG)**
+The single config directory for workestrate. Default `~/.workestrate`.
 Contains `config.toml` (registry),
-`overrides.toml`, `secrets/`, `config-repos/`, `sources/`, `state/`, `cache/`.
-Resolution: `WORKESTRATE_HOME` env → legacy XDG (compat) → default
+`overrides.toml`, `secrets/`, `fleets/`, `sources/`, `state/`, `cache/`.
+Resolution: `WORKESTRATE_CONFIG` env → legacy XDG (compat) → default
 `~/.workestrate` (the trusted-ancestor auto-discovery tier was removed; see
 spec 08 + ADR 0023 addendum). Precedents: `~/.kube`, `~/.docker`, `~/.cargo`.
 See ADR 0023.
 
-**Bundle (repo-local home)**
-A `$WORKESTRATE_HOME` placed inside a repository (typically
+**Bundle (repo-local config)**
+A `$WORKESTRATE_CONFIG` placed inside a repository (typically
 `<repo>/.workestrate/`) for container persistence. Bind-mountable across
 container restarts. The `.envrc`/`local-xdg.sh` machinery that set
-`WORKESTRATE_HOME` to point at it is REMOVED (2026-09-04 note: `local-xdg.sh`
+`WORKESTRATE_CONFIG` to point at it is REMOVED (2026-09-04 note: `local-xdg.sh`
 was removed in `418530a`, `.envrc` deleted in `7805648`); the bundle remains as
 a layout concept. See ADR 0023.
 
-**migrate-home**
-`workestrate migrate-home` — migrates a legacy XDG three-home layout
-(config/data/state split) into the single tool home. Idempotent; warns on
-conflicts. Stamps `home_version = 2`, clears `store_dir`/`state_dir`, and
-rewrites `configs.<name>.url` fields pointing into the old layout (remote
+**migrate-config**
+`workestrate migrate-config` — migrates a legacy XDG three-directory layout
+(config/data/state split) into the single config. Idempotent; warns on
+conflicts. Stamps `config_version = 2`, clears `store_dir`/`state_dir`, and
+rewrites `fleets.<name>.url` fields pointing into the old layout (remote
 URLs are left untouched). Emits a deprecation note when legacy XDG is
 detected.
 
@@ -88,7 +88,7 @@ detected.
 A sanitized, tracked copy of the config shipped with the tool at
 `config.reference/workestrate.toml`. Contains placeholder secrets (rejected at
 runtime by `reject_if_placeholder`, `runtime.rs:10-22`). Used as the fallback
-when no config repos are registered (fresh install, CI). `plan`/`check`/
+when no fleets are registered (fresh install, CI). `plan`/`check`/
 `validate-config` work with reference config; `up`/`exec` refuse (placeholder
 secrets).
 
@@ -99,7 +99,7 @@ Listed in `[[trusted_projects]]` in the registry. `workestrate config trust
 ignored. This is the `direnv allow` model (ADR 0014).
 
 **Purity invariant**
-The rule that config repos contain only declarative data + SOPS-encrypted
+The rule that fleets contain only declarative data + SOPS-encrypted
 secrets + static files. No executable logic (scripts, nix expressions,
 `extraCommands`). All logic is named recipes in core. Enforced by the config
 loader (deserializes TOML into typed structs; no `eval`/`exec` path). This is

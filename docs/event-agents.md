@@ -49,7 +49,7 @@ What the CLI already provides for an event-driven role:
 - **State.** `[[mounts]]` with `mode = "rw" | "ro"`; `[[seed_files]]` with
   `only_if_missing` and `template`. Relative mount hosts, seed sources and
   non-state seed targets resolve against the content root of the layer that
-  declares them, not the config-repo root: a root `workestrate.toml` resolves
+  declares them, not the fleet root: a root `workestrate.toml` resolves
   from the repo root, while a capsule under `workestrate/workloads/<role>/`
   resolves from `workestrate/`. Seed targets under `workspaces/` or `var/`
   resolve under the state directory instead.

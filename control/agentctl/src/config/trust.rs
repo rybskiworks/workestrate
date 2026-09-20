@@ -8,7 +8,7 @@ use crate::config::paths::{base_registry_path, expand_tilde};
 use crate::config::{Registry, TrustedProject, load_registry};
 
 /// Base-registry trust check; reads the base registry directly to avoid
-/// recursing through [`registry_path`] → [`resolve_home_with_kind`]. The
+/// recursing through [`registry_path`] → [`resolve_config_dir_with_kind`]. The
 /// discovery tier that was its original call site was removed (spec 08 step
 /// (e)); the function is kept as the base-registry trust check (exercised by
 /// the FS-21 test below).
@@ -45,7 +45,7 @@ pub fn is_dir_trusted_via_base_registry(dir: &Path) -> bool {
 
 /// One-time stderr warning when the trust-check registry exists but fails to
 /// parse (FS-21). `is_dir_trusted_via_base_registry` runs per ancestor per
-/// home resolution; without this guard the warning would repeat per call.
+/// config resolution; without this guard the warning would repeat per call.
 static TRUST_REGISTRY_PARSE_WARN: std::sync::Once = std::sync::Once::new();
 
 fn emit_trust_registry_parse_warn(path: &Path) {
@@ -174,7 +174,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
         let old_ref = std::env::var("WORKESTRATE_REFERENCE_CONFIG").ok();
         let old_cwd = std::env::current_dir().ok();
@@ -191,7 +191,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG") };
         // Cleanup phase 2: opt into the reference base layer so case 1 (all
@@ -228,7 +228,7 @@ pub(crate) mod tests {
             ("HOME", old_home),
             ("XDG_CONFIG_HOME", old_xdg),
             ("WORKESTRATE_CONTEXT", old_ctx),
-            ("WORKESTRATE_CONFIG_DIR", old_config_dir),
+            ("WORKESTRATE_FLEET_DIR", old_config_dir),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
             ("WORKESTRATE_REFERENCE_CONFIG", old_ref),
         ] {
@@ -269,7 +269,7 @@ pub(crate) mod tests {
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_CONFIG_DIR").ok();
+        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
         let old_cwd = std::env::current_dir().ok();
 
@@ -285,7 +285,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_NO_PROJECT_CONFIG") };
         std::env::set_current_dir(root.join("cwd"))?;
@@ -305,7 +305,7 @@ pub(crate) mod tests {
             ("HOME", old_home),
             ("XDG_CONFIG_HOME", old_xdg),
             ("WORKESTRATE_CONTEXT", old_ctx),
-            ("WORKESTRATE_CONFIG_DIR", old_config_dir),
+            ("WORKESTRATE_FLEET_DIR", old_config_dir),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
         ] {
             match v {
@@ -330,7 +330,7 @@ pub(crate) mod tests {
     #[test]
     fn corrupt_base_registry_fails_closed_and_warns() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
 
         let root = std::env::temp_dir().join(format!(
             "workestrate-fs21-{}-{}",
@@ -360,7 +360,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("XDG_STATE_HOME") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_HOME") };
+        unsafe { std::env::remove_var("WORKESTRATE_CONFIG") };
 
         // Fails closed: untrusted. (The one-time stderr warning fires here.)
         assert!(

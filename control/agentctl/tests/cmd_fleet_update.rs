@@ -1,4 +1,4 @@
-//! Integration tests for `workestrate config update` — the dirty-clone
+//! Integration tests for `workestrate fleet update` — the dirty-clone
 //! guard: a registered clone with uncommitted changes (modified tracked
 //! files OR untracked-only) is refused BEFORE any pull, and the registry
 //! on disk is left untouched. Uses an isolated HOME + XDG per test so the
@@ -80,12 +80,12 @@ fn advance_repo(repo: &Path) -> String {
     git_stdout(repo, &["rev-parse", "HEAD"])
 }
 
-/// Pin WORKESTRATE_HOME at `<home>/.workestrate` and return it (registry =
-/// `<dir>/config.toml`, clone store = `<dir>/config-repos/<name>`, lock =
+/// Pin WORKESTRATE_CONFIG at `<dir>/.workestrate` and return it (registry =
+/// `<dir>/config.toml`, clone store = `<dir>/fleets/<name>`, lock =
 /// `<dir>/workestrate.lock`).
-fn pinned_home(home: &IsolatedHome) -> PathBuf {
+fn pinned_config(home: &IsolatedHome) -> PathBuf {
     let dir = home.dir.join(".workestrate");
-    std::fs::create_dir_all(&dir).expect("create pinned home");
+    std::fs::create_dir_all(&dir).expect("create pinned config");
     dir
 }
 
@@ -95,13 +95,13 @@ fn pinned_home(home: &IsolatedHome) -> PathBuf {
 /// pulled "main" and failed outright.
 #[test]
 fn update_ref_less_entry_pulls_the_origin_default_branch() {
-    let home = IsolatedHome::new("cmd-config-update");
-    let store = pinned_home(&home);
+    let home = IsolatedHome::new("cmd-fleet-update");
+    let store = pinned_config(&home);
     let src = home.dir.join("src-team.git");
     source_repo(&src, "trunk");
     // The managed clone: a real clone so origin/HEAD resolves to trunk.
-    let repos_dir = store.join("config-repos");
-    std::fs::create_dir_all(&repos_dir).expect("create config-repos");
+    let repos_dir = store.join("fleets");
+    std::fs::create_dir_all(&repos_dir).expect("create fleets");
     run_git(
         &repos_dir,
         &["clone", "--quiet", src.to_str().expect("utf8 src"), "team"],
@@ -110,7 +110,7 @@ fn update_ref_less_entry_pulls_the_origin_default_branch() {
     std::fs::write(
         store.join("config.toml"),
         format!(
-            "layers = [\"team\"]\n\n[configs.team]\nurl = \"{}\"\n",
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"{}\"\n",
             src.display()
         ),
     )
@@ -120,10 +120,10 @@ fn update_ref_less_entry_pulls_the_origin_default_branch() {
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "update", "team"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["fleet", "update", "team"])
         .output()
-        .expect("invoke config update");
+        .expect("invoke fleet update");
     assert!(
         out.status.success(),
         "ref-less update must pull origin/HEAD (trunk); stderr=\n{}",
@@ -151,10 +151,10 @@ fn update_ref_less_entry_pulls_the_origin_default_branch() {
 /// BEFORE any pull, naming the repo and the remediation.
 #[test]
 fn update_ref_less_entry_without_origin_head_fails_with_remediation() {
-    let home = IsolatedHome::new("cmd-config-update");
-    let store = pinned_home(&home);
+    let home = IsolatedHome::new("cmd-fleet-update");
+    let store = pinned_config(&home);
     // A bare `git init` clone: no origin remote at all, so no origin/HEAD.
-    let dest = store.join("config-repos").join("team");
+    let dest = store.join("fleets").join("team");
     std::fs::create_dir_all(&dest).expect("create clone dir");
     run_git(&dest, &["init", "--quiet", "-b", "trunk"]);
     run_git(&dest, &["config", "user.email", "test@example.com"]);
@@ -166,16 +166,16 @@ fn update_ref_less_entry_without_origin_head_fails_with_remediation() {
     // the pull path runs and effective-ref resolution must fail closed.
     std::fs::write(
         store.join("config.toml"),
-        "layers = [\"team\"]\n\n[configs.team]\nurl = \"https://example.com/repo.git\"\n",
+        "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.com/repo.git\"\n",
     )
     .expect("write registry");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "update", "team"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["fleet", "update", "team"])
         .output()
-        .expect("invoke config update");
+        .expect("invoke fleet update");
     assert!(
         !out.status.success(),
         "an unresolvable default ref must fail closed; stdout: {}",
@@ -199,17 +199,17 @@ fn update_ref_less_entry_without_origin_head_fails_with_remediation() {
 /// A dirty clone (modified tracked file) is refused before any pull.
 #[test]
 fn update_refuses_dirty_clone() {
-    let home = IsolatedHome::new("cmd-config-update");
+    let home = IsolatedHome::new("cmd-fleet-update");
     home.write_registry_entry("personal", "");
-    let repo = home.create_clean_git_repo("personal");
+    let repo = home.create_clean_git_fleet("personal");
     // Make it dirty: uncommitted modification to a tracked file.
     std::fs::write(repo.join("README.md"), "dirty edit").expect("dirty the repo");
 
     let out = home
         .cmd()
-        .args(["config", "update", "personal"])
+        .args(["fleet", "update", "personal"])
         .output()
-        .expect("invoke config update");
+        .expect("invoke fleet update");
     assert!(
         !out.status.success(),
         "dirty clone should fail; stdout: {}",
@@ -231,7 +231,7 @@ fn update_refuses_dirty_clone() {
     // Registry on disk is unchanged: entry still present, no rev recorded.
     let registry = home.read_registry();
     assert!(
-        registry.contains("[configs.personal]"),
+        registry.contains("[fleets.personal]"),
         "registry entry must remain after refusal; got:\n{}",
         registry
     );
@@ -243,20 +243,20 @@ fn update_refuses_dirty_clone() {
 }
 
 /// An untracked-only clone also counts as dirty (FN-1 parity with
-/// `config remove --delete`).
+/// `fleet remove --delete`).
 #[test]
 fn update_refuses_untracked_only_dirty_clone() {
-    let home = IsolatedHome::new("cmd-config-update");
+    let home = IsolatedHome::new("cmd-fleet-update");
     home.write_registry_entry("personal", "");
-    let repo = home.create_clean_git_repo("personal");
+    let repo = home.create_clean_git_fleet("personal");
     // Make it dirty via an untracked file only.
     std::fs::write(repo.join("scratch.txt"), "untracked").expect("dirty the repo");
 
     let out = home
         .cmd()
-        .args(["config", "update", "personal"])
+        .args(["fleet", "update", "personal"])
         .output()
-        .expect("invoke config update");
+        .expect("invoke fleet update");
     assert!(
         !out.status.success(),
         "untracked-only dirty clone should fail; stdout: {}",
@@ -278,7 +278,7 @@ fn update_refuses_untracked_only_dirty_clone() {
     // Registry on disk is unchanged: entry still present, no rev recorded.
     let registry = home.read_registry();
     assert!(
-        registry.contains("[configs.personal]"),
+        registry.contains("[fleets.personal]"),
         "registry entry must remain after refusal; got:\n{}",
         registry
     );

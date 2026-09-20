@@ -320,7 +320,7 @@
               # Hoist the init/update verb in front of the target-selector
               # flags: the historical script accepted options before or after
               # the command, while the CLI parses them as flags OF the verb.
-              # Options that take a value (--config/--config-dir/--home, both
+              # Options that take a value (--config/--fleet/--fleet-dir, both
               # `--opt value` and `--opt=value` forms) are consumed together
               # with their value, so a value named init/update is never
               # mistaken for the verb; a missing value errors out before
@@ -330,7 +330,7 @@
               saw_help=0
               while [ $# -gt 0 ]; do
                 case "$1" in
-                  --config|--config-dir|--home)
+                  --config|--fleet|--fleet-dir)
                     opt="$1"
                     if [ $# -lt 2 ]; then
                       echo "[setup-secrets] ERROR: $opt requires a value" >&2
@@ -339,7 +339,7 @@
                     rest+=("$1" "$2")
                     shift 2
                     ;;
-                  --config=*|--config-dir=*|--home=*)
+                  --config=*|--fleet=*|--fleet-dir=*)
                     rest+=("$1")
                     shift
                     ;;

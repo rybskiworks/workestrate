@@ -186,7 +186,7 @@
       }
     },
     "virtualization": {
-      "description": "Per-workload nested-virtualization ask (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent table) = off — current behavior, no device expectation, no checks. Merges whole-unit (last layer wins); the home `[policy.virtualization]` seal is collected via the ladder, never merged.",
+      "description": "Per-workload nested-virtualization ask (`[workloads.<name>.virtualization]`; ADR 0036 §3). `None` (absent table) = off — current behavior, no device expectation, no checks. Merges whole-unit (last layer wins); the config `[policy.virtualization]` seal is collected via the ladder, never merged.",
       "default": null,
       "anyOf": [
         {
@@ -321,7 +321,7 @@
       ]
     },
     "DefaultAction": {
-      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` is an explicit opt-in that stands alone (absent = deny; home `final` seals still veto).",
+      "description": "Default per-direction action for a workload's network policy (`[...network.defaults] egress|ingress = \"allow\" | \"deny\"`). `Deny` is the fail-closed default; `Allow` is an explicit opt-in that stands alone (absent = deny; config `final` seals still veto).",
       "oneOf": [
         {
           "description": "Fail-open: all traffic in that direction allowed unless a `deny` rule matches.",
@@ -728,7 +728,7 @@
           }
         },
         "keep_last": {
-          "description": "Keep-last-N rung for this capsule's nix-layered image (ADR 0032 §Image tags, RESOLVED user decision 3): the top rung of the cascade `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < home settings (`RegistrySettings.image_keep_last`) < config-repo entry (`ConfigRepoEntry.image_keep_last`) < THIS field. First Some wins; an explicit 0 is a hard error (the just-loaded tag always counts toward N). Enforced at load time by prune-on-load.",
+          "description": "Keep-last-N rung for this capsule's nix-layered image (ADR 0032 §Image tags, RESOLVED user decision 3): the top rung of the cascade `crate::images::gc::DEFAULT_IMAGE_KEEP_LAST` < config settings (`RegistrySettings.image_keep_last`) < fleet entry (`FleetEntry.image_keep_last`) < THIS field. First Some wins; an explicit 0 is a hard error (the just-loaded tag always counts toward N). Enforced at load time by prune-on-load.",
           "type": [
             "integer",
             "null"
@@ -1244,7 +1244,7 @@
       "additionalProperties": false
     },
     "NestedMode": {
-      "description": "Nested-virtualization demand of ONE workload (ADR 0036 §3): the flat per-workload `[workloads.<name>.virtualization]` table with its single tri-state `nested` key (`\"require\"` | `\"prefer\"` | `\"off\"`, default `\"off\"`; an absent table — or an absent key — means off, i.e. current behavior with no device expectation and no gate beyond an explicit `nested≠off` plus the home-final seal).\n\nThe tri-state IS the conflict policy (no generic `on_conflict` field — a second knob could contradict the first): `require` fails closed at `up`, `prefer` warns at `plan` and degrades without the device (never refuses), `off` ignores. `require` demands the whole unit (guest /dev/kvm + VT-x/AMD-V together — the VMM yields both as one); there is deliberately NO `require_device` split (the old device-without-nested hole is closed BY DELETION) and NO backend namespacing (KVM is the only backend on this Linux-microVM arch; a second backend needs its own plan amendment). Non-Linux/x86_64 + `require` fails closed; `plan` stays portable (resolve + warn, never fail).",
+      "description": "Nested-virtualization demand of ONE workload (ADR 0036 §3): the flat per-workload `[workloads.<name>.virtualization]` table with its single tri-state `nested` key (`\"require\"` | `\"prefer\"` | `\"off\"`, default `\"off\"`; an absent table — or an absent key — means off, i.e. current behavior with no device expectation and no gate beyond an explicit `nested≠off` plus the config-final seal).\n\nThe tri-state IS the conflict policy (no generic `on_conflict` field — a second knob could contradict the first): `require` fails closed at `up`, `prefer` warns at `plan` and degrades without the device (never refuses), `off` ignores. `require` demands the whole unit (guest /dev/kvm + VT-x/AMD-V together — the VMM yields both as one); there is deliberately NO `require_device` split (the old device-without-nested hole is closed BY DELETION) and NO backend namespacing (KVM is the only backend on this Linux-microVM arch; a second backend needs its own plan amendment). Non-Linux/x86_64 + `require` fails closed; `plan` stays portable (resolve + warn, never fail).",
       "oneOf": [
         {
           "description": "Current behavior: no device expectation, no checks.",
@@ -1261,7 +1261,7 @@
           ]
         },
         {
-          "description": "Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU nested disabled, or a home-final ban) → fail-closed refusal at `up`.",
+          "description": "Guest must have /dev/kvm + VT-x/AMD-V; absent/unreadable (or CPU nested disabled, or a config-final ban) → fail-closed refusal at `up`.",
           "type": "string",
           "enum": [
             "require"
@@ -1270,7 +1270,7 @@
       ]
     },
     "NetworkConfig": {
-      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (absent = deny; explicit `allow` stands alone, home `final` seals still veto). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
+      "description": "Per-workload network policy (`workloads.<name>.network`). `defaults.egress` / `defaults.ingress` are the per-direction fail-closed switches (absent = deny; explicit `allow` stands alone, config `final` seals still veto). The rule surface has migrated to hierarchical policy (`policy.egress` / `policy.ingress`) per ADR 0035; `network.egress` / `network.deny` / `network.ingress` are removed and hard-error with ADR-citing messages.",
       "type": "object",
       "properties": {
         "defaults": {
@@ -1287,7 +1287,7 @@
       "additionalProperties": false
     },
     "NetworkDefaultsConfig": {
-      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; explicit `allow` stands alone; home `final` seals still veto).",
+      "description": "Per-workload network defaults (`[...network.defaults]`). `egress` and `ingress` are the per-direction fail-closed switches (absent = `deny`; explicit `allow` stands alone; config `final` seals still veto).",
       "type": "object",
       "properties": {
         "egress": {
@@ -1366,7 +1366,7 @@
       "type": "object",
       "properties": {
         "egress": {
-          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (home registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
+          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (config registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
           "default": null,
           "anyOf": [
             {
@@ -1413,7 +1413,7 @@
           ]
         },
         "secrets": {
-          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the config registry (`Registry.policy`, operator scope), a workestrate.toml layer (fleet-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
           "default": null,
           "anyOf": [
             {
@@ -1425,7 +1425,7 @@
           ]
         },
         "ssh": {
-          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (config registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
           "default": null,
           "anyOf": [
             {
@@ -1437,7 +1437,7 @@
           ]
         },
         "virtualization": {
-          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (config registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
           "default": null,
           "anyOf": [
             {
@@ -1658,11 +1658,11 @@
       ]
     },
     "SecretsPolicyFragment": {
-      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the config-registry, fleet-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then config registry (`Registry.policy.secrets` in `<config>/config.toml`, the operator scope), then each fleet layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
       "type": "object",
       "properties": {
         "final": {
-          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — fleet layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
           "default": false,
           "type": "boolean"
         },
@@ -1720,7 +1720,7 @@
       "additionalProperties": false
     },
     "SshPolicyFragment": {
-      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the config-registry, fleet-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
       "type": "object",
       "properties": {
         "final": {
@@ -1740,7 +1740,7 @@
       "additionalProperties": false
     },
     "VirtualizationConfig": {
-      "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; home grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + home-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
+      "description": "`[workloads.<name>.virtualization]` — the workload's nested-virt ASK (ADR 0036 §3, ask-vs-grant: the workload asks with strength require|prefer|off, like firewall allow-rules; config grants/restricts via [`VirtualizationPolicyFragment`]). `None` (absent table) = omitted → Off. An explicit `nested≠off` stands alone — no entitlement gate (the entitlements mechanism was removed 2026-09-04; review + config-final suffice). Merges whole-unit like [`InstancePolicy`]: a higher layer re-declaring the table replaces it wholesale.",
       "type": "object",
       "properties": {
         "nested": {
@@ -1759,7 +1759,7 @@
       "additionalProperties": false
     },
     "VirtualizationPolicyFragment": {
-      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "description": "`[policy.virtualization]` fragment — the config-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (config registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
       "type": "object",
       "properties": {
         "allow_nested": {

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// Global lock for tests that mutate process env vars.
 ///
 /// Cargo runs unit tests in parallel by default, and tests that set
-/// `WORKESTRATE_CONFIG_DIR` or similar env vars would otherwise race.
+/// `WORKESTRATE_FLEET_DIR` or similar env vars would otherwise race.
 pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Global lock for tests that mutate the process-global provenance stores
@@ -30,7 +30,7 @@ pub static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// note.
 pub static PROVENANCE_STORAGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// RAII guard that points `WORKESTRATE_CONFIG_DIR` at the committed test
+/// RAII guard that points `WORKESTRATE_FLEET_DIR` at the committed test
 /// fixture (a copy of the pre-strip-down 5-workload config) and restores the
 /// previous state on drop. Holds a global lock so env-var tests do not race
 /// when Cargo runs them in parallel.
@@ -48,7 +48,7 @@ impl TestConfigGuard {
             .join("config");
         // SAFETY: holds the ENV_TEST_LOCK mutex guard for its lifetime,
         // serializing env mutation across parallel tests.
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", fixture) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", fixture) };
         Self { _lock: lock }
     }
 }
@@ -59,7 +59,7 @@ impl Drop for TestConfigGuard {
         // SAFETY: the ENV_TEST_LOCK guard is still held during Drop (field
         // drop order runs after this fn body), so env mutation stays
         // serialized.
-        unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
     }
 }
 
@@ -98,12 +98,12 @@ impl Drop for EnvGuard {
     }
 }
 
-pub const HOME_ENV_KEYS: &[&str] = &[
-    "WORKESTRATE_HOME",
+pub const CONFIG_ENV_KEYS: &[&str] = &[
+    "WORKESTRATE_CONFIG",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
-    "WORKESTRATE_CONFIG_DIR",
+    "WORKESTRATE_FLEET_DIR",
     "WORKESTRATE_NO_PROJECT_CONFIG",
     "WORKESTRATE_INVOKE_CWD",
     "HOME",

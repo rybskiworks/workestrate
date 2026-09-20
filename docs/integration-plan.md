@@ -138,7 +138,7 @@ For M1: master key + network policy (Microsandbox default-deny) is the security 
 
 ## Odysseus integration
 
-> The full companion-services (chromadb/searxng/ntfy) gap analysis (docs/odysseus-full-capability.md) moved to the user's personal config repo, as it is personal-workload content rather than generic tooling.
+> The full companion-services (chromadb/searxng/ntfy) gap analysis (docs/odysseus-full-capability.md) moved to the user's personal fleet, as it is personal-workload content rather than generic tooling.
 
 ### Current state
 

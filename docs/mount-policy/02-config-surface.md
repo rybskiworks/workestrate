@@ -165,12 +165,12 @@ allow = ["tmp/**"]
 > Carries the activation caveat: at the pinned runtime this recipe only
 > denies; the `tmp/**` corner activates at re-pin.
 
-**Sealed credential (protect tier)** — operator scope only (home registry or
+**Sealed credential (protect tier)** — operator scope only (config registry or
 user-global overrides); a final `read.deny` there compiles to the protect wire
 bucket — hidden AND untouchable, unadoptable:
 
 ```toml
-# home registry config.toml — operator scope
+# config registry config.toml — operator scope
 [policy.mounts.read]
 deny = [{ pattern = "**/agent/auth.json", final = true }]
 ```

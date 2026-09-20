@@ -689,11 +689,11 @@ fn everything_interactive_confirm() -> Result<Option<bool>> {
 }
 
 /// The per-scope confirmation prompt for the MANAGED rungs (context /
-/// config-ref / home). Home keeps the exact legacy down-all wording.
+/// config-ref / config). Config keeps the exact legacy down-all wording.
 fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownScope) -> String {
     use crate::microsandbox::runtime::down_scope::DownScope;
     match scope {
-        DownScope::Home => {
+        DownScope::Config => {
             "This will stop EVERY running workestrate sandbox. Continue? [y/N] ".to_string()
         }
         DownScope::Context(ctx) => format!(
@@ -716,7 +716,7 @@ fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownSc
 /// nonzero (`report_down_aggregate`). An EMPTY selection is Ok and reported
 /// as `0 target(s)` — never an error.
 ///
-/// Gates: the managed rungs (context/config-ref/home) take the standard
+/// Gates: the managed rungs (context/config-ref/config) take the standard
 /// single yes-gate (interactive prompt; piped y confirms; `--yes` skips).
 /// EVERYTHING is DOUBLE-GATED: the flag must appear twice AND pass the
 /// yes-gate, whose non-interactive form hard-refuses without `--yes`
@@ -776,13 +776,13 @@ pub async fn cmd_down_ladder(
     }
 
     // ---- retained-generation sweeps (BROAD rungs only) ----
-    // Home/Everything sweep EVERY retained generation home, not just the
+    // Config/Everything sweep EVERY retained generation home, not just the
     // resolved one (msb state generations): the record-driven targets were
     // torn down above, ONCE, against the resolved home (the workestrate
     // port registry is generation-agnostic); each EXTRA generation
     // contributes its own dir-driven candidates, torn down with MSB_HOME
     // pinned to that generation dir. Targeted rungs stay current-only.
-    let generation_sweeps = if matches!(scope, DownScope::Home | DownScope::Everything) {
+    let generation_sweeps = if matches!(scope, DownScope::Config | DownScope::Everything) {
         down_retained_generations(&state_dir, &scope).await
     } else {
         Vec::new()
@@ -811,7 +811,7 @@ pub async fn cmd_down_ladder(
         }
     }
     // ANY per-target failure in ANY swept home exits nonzero — the same
-    // aggregate posture as the single-home sweep.
+    // aggregate posture as the single-config sweep.
     let all_results: Vec<crate::microsandbox::runtime::DownResult> = results
         .iter()
         .chain(
@@ -883,7 +883,7 @@ async fn down_retained_generations(
 
 /// `workestrate clean` — remove the CONTENTS of the volatile state-dir
 /// subdirectories (`workspaces/`, `var/`, `run/`), leaving the directories
-/// themselves in place. Never touches the store (`config-repos/`, `sources/`)
+/// themselves in place. Never touches the store (`fleets/`, `sources/`)
 /// or any
 /// config file. Interactive confirmation unless `--yes`; non-interactive
 /// stdin without `--yes` is a hard refusal (same policy as `down --all`).
@@ -1416,7 +1416,7 @@ mod tests {
     fn resolve_dependent_instance_id_parallel_strategy_allocates() {
         use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
+        let _env = EnvGuard::capture(&["WORKESTRATE_FLEET_DIR", "WORKESTRATE_STATE_DIR"]);
         let cfg_dir = uniq_dir("depid-cfg");
         std::fs::create_dir_all(&cfg_dir).unwrap();
         std::fs::write(
@@ -1435,7 +1435,7 @@ strategy = "parallel"
         .unwrap();
         let state_dir = uniq_dir("depid-state");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &cfg_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
 
@@ -1511,7 +1511,7 @@ strategy = "parallel"
         use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&[
-            "WORKESTRATE_CONFIG_DIR",
+            "WORKESTRATE_FLEET_DIR",
             "WORKESTRATE_STATE_DIR",
             crate::config::INVOKE_CWD_ENV,
         ]);
@@ -1539,7 +1539,7 @@ strategy = "per-dir"
         let invoke = uniq_dir("depid-invoke-perdir");
         std::fs::create_dir_all(&invoke).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &cfg_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -1579,7 +1579,7 @@ strategy = "per-dir"
     fn resolve_dependent_instance_id_singleton_strategy_none_unless_new() {
         use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG_DIR", "WORKESTRATE_STATE_DIR"]);
+        let _env = EnvGuard::capture(&["WORKESTRATE_FLEET_DIR", "WORKESTRATE_STATE_DIR"]);
         let cfg_dir = uniq_dir("depid-cfg-single");
         std::fs::create_dir_all(&cfg_dir).unwrap();
         std::fs::write(
@@ -1589,7 +1589,7 @@ strategy = "per-dir"
         .unwrap();
         let state_dir = uniq_dir("depid-state-single");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &cfg_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
 
@@ -1615,7 +1615,7 @@ strategy = "per-dir"
         use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _env = EnvGuard::capture(&[
-            "WORKESTRATE_CONFIG_DIR",
+            "WORKESTRATE_FLEET_DIR",
             "WORKESTRATE_STATE_DIR",
             crate::config::INVOKE_CWD_ENV,
         ]);
@@ -1639,7 +1639,7 @@ strategy = "per-dir"
         let invoke = uniq_dir("depid-invoke-inline-perdir");
         std::fs::create_dir_all(&invoke).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &cfg_dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &cfg_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).

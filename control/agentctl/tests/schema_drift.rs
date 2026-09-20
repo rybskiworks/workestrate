@@ -7,7 +7,7 @@
 //!   - `workestrate.schema.json` (full schema, from `ConfigFile`),
 //!   - `workestrate-workload.schema.json` (workload subschema, from
 //!     `WorkloadConfig`),
-//!   - `registry.schema.json` (tool-home registry schema, from `Registry`).
+//!   - `registry.schema.json` (config registry schema, from `Registry`).
 //!
 //! Bootstrap semantics: when a committed file is still the hand-written
 //! PLACEHOLDER (no nix host has regenerated it yet), that artifact passes

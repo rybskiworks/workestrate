@@ -87,7 +87,7 @@ mod tests {
         RuleOrigin {
             layer: "personal".to_string(),
             file: PathBuf::from("config.toml"),
-            scope_kind: ScopeKind::HomeRegistry,
+            scope_kind: ScopeKind::ConfigRegistry,
         }
     }
 
@@ -96,7 +96,7 @@ mod tests {
         let text = origin().to_string();
         assert!(text.contains("personal"), "{text}");
         assert!(text.contains("config.toml"), "{text}");
-        assert!(text.contains("home-registry"), "{text}");
+        assert!(text.contains("config-registry"), "{text}");
     }
 
     #[test]

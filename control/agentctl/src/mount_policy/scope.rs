@@ -2,7 +2,7 @@
 //!
 //! Scopes are COLLECTED per layer in stack order and handed to the compiler
 //! (ADR 0028: collect-and-compile, never merge). Compile order IS authority
-//! order: operator scopes (home registry, user-global overrides) come first
+//! order: operator scopes (config registry, user-global overrides) come first
 //! and outrank repo/project scopes — an operator's terminal decision cannot
 //! be reversed by anything later in the stack (spec 22 §4, §5).
 
@@ -17,14 +17,14 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeKind {
-    /// Home registry `config.toml` — the operator's global policy.
-    HomeRegistry,
+    /// Config registry `config.toml` — the operator's global policy.
+    ConfigRegistry,
     /// `overrides.toml` (user-global overrides, ADR 0019).
     UserGlobalOverrides,
     /// The reference config, which ships the sensitive defaults (spec 22 §9).
     ReferenceConfig,
-    /// A config-repo layer, in registry stack order.
-    ConfigRepoLayer,
+    /// A fleet layer, in registry stack order.
+    FleetLayer,
     /// `[workloads.<name>.policy.mounts]`.
     Workload,
     /// A `[[workloads.<name>.mounts]]` entry's policy (declaring layer only;
@@ -39,24 +39,24 @@ impl ScopeKind {
         self as u32
     }
 
-    /// Operator scopes (home registry, user-global overrides) may declare
+    /// Operator scopes (config registry, user-global overrides) may declare
     /// final allows, and their final read.deny entries route to the protect
     /// wire bucket; non-operator scopes may not declare final allows
     /// (spec 22 §5).
     pub fn is_operator(self) -> bool {
         matches!(
             self,
-            ScopeKind::HomeRegistry | ScopeKind::UserGlobalOverrides
+            ScopeKind::ConfigRegistry | ScopeKind::UserGlobalOverrides
         )
     }
 
     /// Human label used in origin display (spec 22 §11).
     pub fn label(self) -> &'static str {
         match self {
-            ScopeKind::HomeRegistry => "home-registry",
+            ScopeKind::ConfigRegistry => "config-registry",
             ScopeKind::UserGlobalOverrides => "user-global-overrides",
             ScopeKind::ReferenceConfig => "reference-config",
-            ScopeKind::ConfigRepoLayer => "config-repo-layer",
+            ScopeKind::FleetLayer => "fleet-layer",
             ScopeKind::Workload => "workload",
             ScopeKind::MountEntry => "mount-entry",
         }
@@ -213,8 +213,8 @@ mod tests {
         let mut kinds = [
             ScopeKind::MountEntry,
             ScopeKind::Workload,
-            ScopeKind::ConfigRepoLayer,
-            ScopeKind::HomeRegistry,
+            ScopeKind::FleetLayer,
+            ScopeKind::ConfigRegistry,
             ScopeKind::ReferenceConfig,
             ScopeKind::UserGlobalOverrides,
         ];
@@ -222,10 +222,10 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                ScopeKind::HomeRegistry,
+                ScopeKind::ConfigRegistry,
                 ScopeKind::UserGlobalOverrides,
                 ScopeKind::ReferenceConfig,
-                ScopeKind::ConfigRepoLayer,
+                ScopeKind::FleetLayer,
                 ScopeKind::Workload,
                 ScopeKind::MountEntry,
             ]
@@ -233,12 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn operator_scopes_are_home_registry_and_user_global_overrides() {
-        assert!(ScopeKind::HomeRegistry.is_operator());
+    fn operator_scopes_are_config_registry_and_user_global_overrides() {
+        assert!(ScopeKind::ConfigRegistry.is_operator());
         assert!(ScopeKind::UserGlobalOverrides.is_operator());
         for kind in [
             ScopeKind::ReferenceConfig,
-            ScopeKind::ConfigRepoLayer,
+            ScopeKind::FleetLayer,
             ScopeKind::Workload,
             ScopeKind::MountEntry,
         ] {

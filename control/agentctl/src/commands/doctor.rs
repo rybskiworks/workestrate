@@ -20,7 +20,7 @@ pub struct DoctorCheck {
     #[serde(skip_serializing_if = "Option::is_none")]
     remediation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    repos: Option<Vec<serde_json::Value>>,
+    entries: Option<Vec<serde_json::Value>>,
 }
 
 impl DoctorCheck {
@@ -30,7 +30,7 @@ impl DoctorCheck {
             status,
             message,
             remediation: None,
-            repos: None,
+            entries: None,
         }
     }
 
@@ -39,8 +39,8 @@ impl DoctorCheck {
         self
     }
 
-    fn with_repos(mut self, repos: Vec<serde_json::Value>) -> Self {
-        self.repos = Some(repos);
+    fn with_entries(mut self, entries: Vec<serde_json::Value>) -> Self {
+        self.entries = Some(entries);
         self
     }
 }
@@ -258,7 +258,7 @@ pub fn doctor_check_msb() -> DoctorCheck {
 
 /// `generation` check (msb state generations — see
 /// [`crate::microsandbox::generation`]): the BAKED msb store-path
-/// generation key against the resolved home's generation. An unmanaged msb
+/// generation key against the resolved config's generation. An unmanaged msb
 /// (no nix store path) is OK (single-generation legacy behavior). A
 /// `current`/`healed` generation mismatch, an explicit MSB_HOME that
 /// canonicalizes to a DIFFERENT `generations/<key12>` dir (the nix
@@ -434,7 +434,7 @@ pub fn doctor_check_version_compare() -> DoctorCheck {
 /// Resolve the canonical msb home: non-empty `MSB_HOME` verbatim (empty
 /// treated as unset), else `$HOME/.microsandbox/current` (the `current`
 /// generation symlink — see [`crate::microsandbox::generation`]), else
-/// `./.microsandbox/current`. Mirrors `microsandbox_utils::resolve_home`
+/// `./.microsandbox/current`. Mirrors `microsandbox_utils::resolve_config_dir`
 /// (the SDK default) with the generation-aware default.
 pub fn resolve_msb_home() -> PathBuf {
     if let Some(path) = std::env::var_os("MSB_HOME").filter(|v| !v.is_empty()) {
@@ -633,13 +633,13 @@ pub fn image_records_check(state: &ImagesState, listing: &StoreListing) -> Docto
         )
         .with_remediation(&format!(
             "re-run 'workestrate workload build --repo {first_repo}' (or load the image \
-             manually via the declaring repo's 'load-images' recipe) to re-populate the \
+             manually via the declaring fleet's 'load-images' recipe) to re-populate the \
              store; records are advisory — the store is ground truth (spec 21 §3.2)"
         ))
     }
 }
 
-/// `image_records` check (spec 21 §3.2, read-only): the per-home
+/// `image_records` check (spec 21 §3.2, read-only): the per-config
 /// `state/images.json` records against the live msb store listing (`msb
 /// image ls` via [`msb_binary`]). Never FAILs: a missing recorded tag or an
 /// unreadable store is WARN (the records are advisory; the store is ground
@@ -672,32 +672,32 @@ pub fn doctor_check_image_records() -> DoctorCheck {
     image_records_check(&state, &listing)
 }
 
-pub fn doctor_check_home() -> DoctorCheck {
-    let (home, kind) = config::resolve_home_with_kind();
-    let message = format!("{} ({:?})", home.display(), kind);
-    if home.exists() {
-        DoctorCheck::new("home", "OK", message)
+pub fn doctor_check_config() -> DoctorCheck {
+    let (config_dir, kind) = config::resolve_config_dir_with_kind();
+    let message = format!("{} ({:?})", config_dir.display(), kind);
+    if config_dir.exists() {
+        DoctorCheck::new("config", "OK", message)
     } else {
-        DoctorCheck::new("home", "WARN", format!("{} (does not exist)", message))
-            .with_remediation("Run 'workestrate init' to create the tool home")
+        DoctorCheck::new("config", "WARN", format!("{} (does not exist)", message))
+            .with_remediation("Run 'workestrate init' to create the config")
     }
 }
 
-pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
+pub fn doctor_check_fleets() -> Result<DoctorCheck> {
     let registry = match config::load_registry()? {
         Some(r) => r,
         None => {
             return Ok(
-                DoctorCheck::new("config_repos", "WARN", "no registry found".to_string())
+                DoctorCheck::new("fleets", "WARN", "no registry found".to_string())
                     .with_remediation("run 'workestrate init'"),
             );
         }
     };
-    let mut repos: Vec<serde_json::Value> = Vec::new();
-    for status in crate::git::collect_repo_statuses(&registry) {
-        let dest = config::config_repo_dir(&status.name);
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    for status in crate::git::collect_fleet_statuses(&registry) {
+        let dest = config::fleet_dir(&status.name);
         if !status.exists {
-            repos.push(serde_json::json!({
+            entries.push(serde_json::json!({
                 "name": status.name,
                 "status": "FAIL",
                 "rev": status.rev,
@@ -712,7 +712,7 @@ pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
         } else {
             format!("rev {}, clean", status.short)
         };
-        repos.push(serde_json::json!({
+        entries.push(serde_json::json!({
             "name": status.name,
             "status": check,
             "rev": status.rev,
@@ -720,24 +720,24 @@ pub fn doctor_check_config_repos() -> Result<DoctorCheck> {
             "message": message,
         }));
     }
-    let worst = if repos.iter().any(|r| r["status"] == "FAIL") {
+    let worst = if entries.iter().any(|r| r["status"] == "FAIL") {
         "FAIL"
-    } else if repos.iter().any(|r| r["status"] == "WARN") {
+    } else if entries.iter().any(|r| r["status"] == "WARN") {
         "WARN"
     } else {
         "OK"
     };
-    let message = if repos.is_empty() {
-        "no config repos registered".to_string()
+    let message = if entries.is_empty() {
+        "no fleets registered".to_string()
     } else {
-        format!("{} repo(s) checked", repos.len())
+        format!("{} fleet(s) checked", entries.len())
     };
-    Ok(DoctorCheck::new("config_repos", worst, message).with_repos(repos))
+    Ok(DoctorCheck::new("fleets", worst, message).with_entries(entries))
 }
 
 /// `schemas` check: generate both schema artifacts in-process and compare
-/// every known consumer location (tool template, tool home, registered config
-/// repos with a schemas/ dir) byte-for-byte — the same freshness rule as
+/// every known consumer location (tool template, config, registered fleets
+/// with a schemas/ dir) byte-for-byte — the same freshness rule as
 /// `schemas update --check`. A missing or mismatched file is STALE per
 /// target; the check-level status is WARN when any copy is stale (stale
 /// copies never break the tool — validate-config uses the Rust types; only
@@ -788,11 +788,11 @@ pub fn doctor_check_schemas() -> Result<DoctorCheck> {
     };
     Ok(DoctorCheck::new("schemas", status, message)
         .with_remediation("Run 'workestrate schemas update' to refresh consumer schema copies")
-        .with_repos(entries))
+        .with_entries(entries))
 }
 
 /// `workestrate doctor` — run environment/tool health checks (KVM, nix,
-/// sops, age, msb, home resolution, config repos), print a human report or a
+/// sops, age, msb, config resolution, fleets), print a human report or a
 /// machine-readable JSON document, and exit non-zero when any check FAILs.
 pub fn cmd_doctor(json: bool) -> Result<()> {
     let checks = vec![
@@ -819,8 +819,8 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
         doctor_check_msb(),
         doctor_check_generation(),
         doctor_check_version_compare(),
-        doctor_check_home(),
-        doctor_check_config_repos()?,
+        doctor_check_config(),
+        doctor_check_fleets()?,
         doctor_check_schemas()?,
         doctor_check_image_records(),
     ];
@@ -846,18 +846,18 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
             if let Some(ref remediation) = check.remediation {
                 println!("  → {}", remediation);
             }
-            if let Some(ref repos) = check.repos {
-                for repo in repos {
-                    // config_repos entries carry name/message; the schemas
+            if let Some(ref entries) = check.entries {
+                for entry in entries {
+                    // fleets entries carry name/message; the schemas
                     // row carries target/path instead.
-                    let name = repo["name"]
+                    let name = entry["name"]
                         .as_str()
-                        .or_else(|| repo["target"].as_str())
+                        .or_else(|| entry["target"].as_str())
                         .unwrap_or("unknown");
-                    let status = repo["status"].as_str().unwrap_or("unknown");
-                    let message = repo["message"].as_str().unwrap_or("");
+                    let status = entry["status"].as_str().unwrap_or("unknown");
+                    let message = entry["message"].as_str().unwrap_or("");
                     let detail = if message.is_empty() {
-                        repo["path"].as_str().unwrap_or("")
+                        entry["path"].as_str().unwrap_or("")
                     } else {
                         message
                     };
@@ -1093,7 +1093,7 @@ mod tests {
 
     /// The OK message carries both the resolved MSB_HOME and the probed
     /// msb version; resolve_msb_home honors non-empty MSB_HOME and treats
-    /// empty as unset (SDK resolve_home mirror).
+    /// empty as unset (SDK resolve_config_dir mirror).
     #[test]
     fn msb_message_carries_home_and_version() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();

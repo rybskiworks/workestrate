@@ -345,7 +345,7 @@ mod tests {
         RuleOrigin {
             layer: "personal".to_string(),
             file: PathBuf::from("config.toml"),
-            scope_kind: ScopeKind::HomeRegistry,
+            scope_kind: ScopeKind::ConfigRegistry,
         }
     }
 

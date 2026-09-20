@@ -39,7 +39,7 @@
 //! §7 degradation is inherited verbatim from `process_target` (nix absent +
 //! tag present → proceed with a stderr note; nix absent + tag missing →
 //! hard error + remediation; unreachable store → the named error). The "No
-//! flake.nix in the declaring repo" row is mode-split exactly like the build
+//! flake.nix in the declaring fleet" row is mode-split exactly like the build
 //! verb: single-target hard error naming the repo, batch skip-with-note —
 //! the shared [`build_cmd::SelectSkip`] message helpers keep the wording
 //! byte-identical.
@@ -80,7 +80,7 @@ pub fn ensure_after_arming(verb: &str, images_ready: bool, pending_override: boo
 }
 
 /// Ensure the named workload's nix-layered images are built+loaded+recorded
-/// (single-target semantics): a NoFlakeRoot declaring repo is a HARD ERROR
+/// (single-target semantics): a NoFlakeRoot declaring fleet is a HARD ERROR
 /// naming the repo (spec §7); a non-nix-layered workload is a silent no-op
 /// (§2.3). `force` is the `--reload-images` flag (spec §5.2).
 pub async fn ensure_images_for_workload(name: &str, force: bool) -> Result<()> {
@@ -89,7 +89,7 @@ pub async fn ensure_images_for_workload(name: &str, force: bool) -> Result<()> {
 
 /// Batch ensure (bare `workload up`, spec §2.1 + §5.2 USER DECISION D3):
 /// every named workload gets the pre-flight with the SAME force flag, all
-/// BEFORE any spawn. A NoFlakeRoot declaring repo is a skip-with-note naming
+/// BEFORE any spawn. A NoFlakeRoot declaring fleet is a skip-with-note naming
 /// the missing flake; the rest of the batch proceeds (spec §7 batch row).
 pub async fn ensure_images_for_workloads(names: &[String], force: bool) -> Result<()> {
     ensure_named(names, force, false).await
@@ -171,7 +171,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::config::ConfigFile;
-    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, unique_state_dir};
+    use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, unique_state_dir};
     use crate::images::build_cmd::SelectSkip;
     use crate::images::detect::DrvEvalError;
     use crate::images::detect::test_fakes::{FakeEvaluator, FakeStoreProbe};
@@ -214,13 +214,13 @@ mod tests {
 
     /// Single-target: hard error naming the repo + the remediation.
     #[test]
-    fn missing_flake_single_target_is_a_hard_error_naming_the_repo() {
+    fn missing_flake_single_target_is_a_hard_error_naming_the_fleet() {
         let msg = no_flake_skip().hard_error_message();
         assert!(msg.contains("workload 'pi'"), "names the workload: {msg}");
-        assert!(msg.contains("repo 'personal'"), "names the repo: {msg}");
+        assert!(msg.contains("fleet 'personal'"), "names the fleet: {msg}");
         assert!(msg.contains("has no flake.nix ancestor"), "{msg}");
         assert!(msg.contains("add a flake.nix"), "remediation: {msg}");
-        assert!(msg.contains("config-repo ritual"), "remediation: {msg}");
+        assert!(msg.contains("fleet ritual"), "remediation: {msg}");
     }
 
     /// Batch: skip-with-note naming the missing flake (the batch proceeds).
@@ -228,7 +228,7 @@ mod tests {
     fn missing_flake_batch_is_a_skip_with_note_naming_the_flake() {
         let msg = no_flake_skip().note_message();
         assert!(msg.starts_with("note: skipping workload 'pi'"), "{msg}");
-        assert!(msg.contains("repo 'personal'"), "names the repo: {msg}");
+        assert!(msg.contains("fleet 'personal'"), "names the fleet: {msg}");
         assert!(msg.contains("has no flake.nix ancestor"), "{msg}");
     }
 
@@ -669,22 +669,22 @@ gating_file = "package-lock.json"
 
     /// NON-OVERRIDE path under an ACTIVE CONTEXT (the existing flow tests
     /// pin ctx=None): the ensure computes the ctx-carrying tag
-    /// `<attr>:<home-ctx>.<sha>` (dot separator) and moves the
+    /// `<attr>:<active-ctx>.<sha>` (dot separator) and moves the
     /// `(repo, attr, Some(ctx))` pointer — never a ctx-less tag or a
-    /// ctx-less pointer while a home context is active (ADR 0032 §Image
+    /// ctx-less pointer while a config context is active (ADR 0032 §Image
     /// tags: image_tag_context = active_context_name when no override is
     /// armed).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
-    async fn home_context_ensure_writes_ctx_tag_and_ctx_pointer() -> Result<()> {
+    async fn active_context_ensure_writes_ctx_tag_and_ctx_pointer() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
         crate::config::set_active_context(Some(crate::config::ActiveContext {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
-        let (tmp, target) = target_fixture("ensure-home-ctx", "alpha");
-        let state_dir = unique_state_dir("ensure-home-ctx-state");
+        let (tmp, target) = target_fixture("ensure-active-ctx", "alpha");
+        let state_dir = unique_state_dir("ensure-active-ctx-state");
 
         // D1 trust path: absent record + present store tag → baseline record
         // + pointer, no build.
@@ -709,7 +709,7 @@ gating_file = "package-lock.json"
                 .lookup(&image_key("personal", want_tag))
                 .map(|r| r.tag.as_str()),
             Some(want_tag),
-            "the record keys under the ctx-carrying home-context tag"
+            "the record keys under the ctx-carrying active-context tag"
         );
         assert_eq!(
             state
@@ -720,7 +720,7 @@ gating_file = "package-lock.json"
                 ))
                 .map(|p| p.tag.as_str()),
             Some(want_tag),
-            "the (repo, attr, home-ctx) pointer moved"
+            "the (repo, attr, active-ctx) pointer moved"
         );
         assert!(
             state
@@ -730,7 +730,7 @@ gating_file = "package-lock.json"
                     None
                 ))
                 .is_none(),
-            "no ctx-less pointer is written while a home context is active"
+            "no ctx-less pointer is written while a config context is active"
         );
         assert!(builder.calls.is_empty() && loader.calls.is_empty());
 
@@ -743,7 +743,7 @@ gating_file = "package-lock.json"
 
     /// OVERRIDE path with an ARMED inline override (`alpha:feat-x`): the
     /// ensure tags under the override context — `<attr>:feat-x.<sha>` — and
-    /// moves ONLY the `(repo, attr, "feat-x")` pointer; the home-context
+    /// moves ONLY the `(repo, attr, "feat-x")` pointer; the config-context
     /// pointer is untouched (never flaps). This pins the reordered
     /// ensure-after-arming seam end-to-end at the ensure core level (ADR
     /// 0032 §Image tags + A5 arming discipline).
@@ -820,7 +820,7 @@ gating_file = "package-lock.json"
                 ))
                 .map(|p| p.tag.as_str()),
             Some("img-alpha:personal.111111111111"),
-            "the home-context pointer NEVER flaps"
+            "the config-context pointer NEVER flaps"
         );
 
         crate::config::clear_inline_override();
@@ -832,7 +832,7 @@ gating_file = "package-lock.json"
 
     // ---- the env-backed entry points: missing-flake single vs batch ----
 
-    /// A flake-less config dir (WORKESTRATE_CONFIG_DIR single-layer mode)
+    /// A flake-less config dir (WORKESTRATE_FLEET_DIR single-layer mode)
     /// declaring `wl_name` nix-layered — the §7 missing-flake row.
     fn write_flakeless_config_dir(label: &str, wl_name: &str) -> PathBuf {
         let dir = unique_state_dir(label);
@@ -850,24 +850,24 @@ gating_file = "package-lock.json"
 
     /// Single-target ensure hard-errors naming the flake-less declaring
     /// repo; the batch entry skips-with-note and proceeds (Ok). Env-backed
-    /// via WORKESTRATE_CONFIG_DIR (the single-layer dev mode sets the same
+    /// via WORKESTRATE_FLEET_DIR (the single-layer dev mode sets the same
     /// provenance/layer-dirs globals the registry path sets).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn missing_flake_single_hard_errors_batch_proceeds() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = unique_state_dir("ensure-flakeless-home");
-        std::fs::create_dir_all(&home).unwrap();
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = unique_state_dir("ensure-flakeless-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
-        // Not covered by HOME_ENV_KEYS; pin it off so the state dir derives
-        // from the temp home hermetically.
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
+        // Not covered by CONFIG_ENV_KEYS; pin it off so the state dir derives
+        // from the temp config hermetically.
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
         let config_dir = write_flakeless_config_dir("ensure-flakeless-config", "pi");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &config_dir) };
 
         // Single: hard error naming the repo (before any nix/msb touch).
         let err = ensure_images_for_workload("pi", false)
@@ -885,7 +885,7 @@ gating_file = "package-lock.json"
         // Batch: skip-with-note; the batch proceeds (Ok, nothing ensured).
         ensure_images_for_workloads(&["pi".to_string()], false).await?;
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
@@ -897,11 +897,11 @@ gating_file = "package-lock.json"
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn non_nix_layered_workloads_are_silent_no_ops() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        let home = unique_state_dir("ensure-noop-home");
-        std::fs::create_dir_all(&home).unwrap();
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let config_dir = unique_state_dir("ensure-noop-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
         let dir = unique_state_dir("ensure-noop-config");
@@ -915,17 +915,17 @@ gating_file = "package-lock.json"
              [workloads.web.network.defaults]\negress = \"deny\"\n",
         )?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &dir) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &dir) };
 
         ensure_images_for_workload("web", false).await?;
         ensure_images_for_workload("web", true).await?;
         ensure_images_for_workloads(&["web".to_string()], true).await?;
         assert!(
-            !images_state_path(&home.join("state")).exists(),
+            !images_state_path(&config_dir.join("state")).exists(),
             "a no-op ensure never touches the state store"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

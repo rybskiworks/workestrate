@@ -433,7 +433,7 @@ pub fn resolve_depends_on_full(
                                 anyhow::bail!(
                                     "dependency '{}' of workload '{}' is required but not running in \
                                      namespace '{}'; a record for it exists in namespace(s) [{}] — \
-                                     the same workload name is declared by multiple config repos \
+                                     the same workload name is declared by multiple fleets \
                                      (last layer wins in the merged config). Start it in this \
                                      namespace, or use `--use {}@<instance>` to select a record from \
                                      another namespace.",
@@ -447,7 +447,7 @@ pub fn resolve_depends_on_full(
                             eprintln!(
                                 "warning: depends_on '{}': no record in namespace '{}', but a record \
                                  exists in namespace(s) [{}] — the same workload name is declared by \
-                                 multiple config repos (last layer wins in the merged config). Falling \
+                                 multiple fleets (last layer wins in the merged config). Falling \
                                  back to the declared port.",
                                 dep, namespace, namespaces
                             );

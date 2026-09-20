@@ -38,7 +38,7 @@ fn json_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 fn secrets_target_defaults_for_registered_repo() {
     let home = IsolatedHome::new("cmd-secrets-target");
     home.write_registry_entry("personal", "");
-    let repo_dir = home.create_repo_dir("personal");
+    let fleet_dir = home.create_fleet_dir("personal");
 
     let out = home
         .cmd()
@@ -54,7 +54,7 @@ fn secrets_target_defaults_for_registered_repo() {
 
     assert_eq!(
         json_field(&stdout, "dir"),
-        Some(repo_dir.to_string_lossy().as_ref()),
+        Some(fleet_dir.to_string_lossy().as_ref()),
         "dir mismatch; stdout: {}",
         stdout
     );
@@ -93,7 +93,7 @@ fn secrets_target_honors_per_repo_overrides() {
         "personal",
         "secrets_file = \".env.custom.enc\"\nage_key_file = \"/custom/key/path\"\n",
     );
-    let repo_dir = home.create_repo_dir("personal");
+    let fleet_dir = home.create_fleet_dir("personal");
 
     let out = home
         .cmd()
@@ -109,7 +109,7 @@ fn secrets_target_honors_per_repo_overrides() {
 
     assert_eq!(
         json_field(&stdout, "dir"),
-        Some(repo_dir.to_string_lossy().as_ref()),
+        Some(fleet_dir.to_string_lossy().as_ref()),
         "dir mismatch; stdout: {}",
         stdout
     );
@@ -151,7 +151,7 @@ fn secrets_target_rejects_unregistered_name() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("config repo 'ghost' not registered"),
+        stderr.contains("fleet 'ghost' not registered"),
         "expected not-registered error, got: {}",
         stderr
     );
@@ -162,8 +162,9 @@ fn secrets_target_rejects_unregistered_name() {
 fn secrets_target_reports_exists_true_when_file_present() {
     let home = IsolatedHome::new("cmd-secrets-target");
     home.write_registry_entry("personal", "");
-    let repo_dir = home.create_repo_dir("personal");
-    std::fs::write(repo_dir.join(".env.enc"), "sops-encrypted-placeholder").expect("seed .env.enc");
+    let fleet_dir = home.create_fleet_dir("personal");
+    std::fs::write(fleet_dir.join(".env.enc"), "sops-encrypted-placeholder")
+        .expect("seed .env.enc");
 
     let out = home
         .cmd()

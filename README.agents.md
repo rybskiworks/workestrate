@@ -35,7 +35,7 @@ nix-tooling                 shared compiler, package-set and development inputs
 Workestrate tool            Rust CLI + Nix packages and reusable image recipes
        ^
        | declarations       TOML, layers, policy, mounts, seeds, secret bindings
-fleet / config repositories own application choices and workload image flakes
+fleets own application choices and workload image flakes
        |
        v
 resolved plan -> lifecycle -> pinned Microsandbox SDK / runtime / guest agent
@@ -53,10 +53,10 @@ capabilities and enforcement depend on the selected backend, image, and host.
 | Term | Meaning here |
 | :--- | :--- |
 | Workload | A named declaration of image, command, environment, mounts, seeds, resources, and policy. |
-| Fleet / config repository | Operator-owned composition. The current CLI calls registered configuration repositories `config`; a fleet can contain multiple workload capsules. |
+| Fleet / fleet | Operator-owned composition. The current CLI calls registered configuration repositories `config`; a fleet can contain multiple workload capsules. |
 | Context | An ordered selection of configuration layers. It also affects runtime slot identity. |
 | Slot / instance | A singleton workload identity, optionally qualified by context, or a parallel instance with its own ID. |
-| Tool home | Registry, config clones, sources, overrides, secrets ciphertext, and tool state; normally `$WORKESTRATE_HOME`, default `~/.workestrate`. |
+| Config | Registry, config clones, sources, overrides, secrets ciphertext, and tool state; normally `$WORKESTRATE_CONFIG`, default `~/.workestrate`. |
 | Microsandbox home | Backend runtime state, selected separately through `MSB_HOME`; packaged defaults use `~/.microsandbox/current`. |
 | Build runtime | Immutable SDK compilation inputs selected by `MSB_BUILD_RUNTIME`, not a mutable runtime home. |
 
@@ -95,7 +95,7 @@ that pinned source. SDK version pins and root Cargo patches must stay consistent
 Cargo does not inherit a dependency workspace's patches. The vendor SDK path is
 a prepared symlink, not a checked-in copy of the fork.
 
-Workload images belong to the config repository or workload capsule that declares
+Workload images belong to the fleet or workload capsule that declares
 them. The tool exports `lib` recipes, including `buildImagesFromConfig`,
 `buildWorkloadImage`, and configuration checks. It does not own a personal fleet's
 application builds. See [Nix ownership](docs/nix-build.md) and
@@ -103,12 +103,12 @@ application builds. See [Nix ownership](docs/nix-build.md) and
 
 ## Configuration model
 
-A config repository uses `workestrate.toml` or directory-mode `workestrate/`
+A fleet uses `workestrate.toml` or directory-mode `workestrate/`
 capsules. It owns its secrets schema, `.env.enc`, and `.sops.yaml`. Registered
-clones live under `$WORKESTRATE_HOME/config-repos/<name>/`; managed source
-checkouts live under `$WORKESTRATE_HOME/sources/<name>/`.
+clones live under `$WORKESTRATE_CONFIG/fleets/<name>/`; managed source
+checkouts live under `$WORKESTRATE_CONFIG/sources/<name>/`.
 
-`WORKESTRATE_CONFIG_DIR` is an explicit development/testing **single-layer
+`WORKESTRATE_FLEET_DIR` is an explicit development/testing **single-layer
 bypass**, not the first layer in a merged stack. Otherwise resolution uses the
 reference fallback or selected context layers in declared order, followed by
 user-global overrides, trusted project configuration, and trusted local overrides.
@@ -125,14 +125,14 @@ Merge behavior is security-aware, not generic last-write-wins: deny and egress
 rules are additive unions, environment bindings merge by key, and other values
 use merge-patch semantics. Egress hosts are checked against the closed
 `ALLOWED_EGRESS_HOSTS` vocabulary. The policy ladder permits standalone `allow`;
-a home-level `final` seals its veto. The retired `entitlements` key is a hard
+a config-level `final` seals its veto. The retired `entitlements` key is a hard
 parse error. Consult the [security model](docs/migration/30-security-model.md)
 and ADR 0035 before changing this behavior.
 
 ### Images, seeds, and workload ownership
 
 A workload's image flake can live beside its declaration in a fleet capsule or
-at the config-repository root. The CLI selects the nearest declaring-source
+at the fleetsitory root. The CLI selects the nearest declaring-source
 flake for `nix-layered` images. Adding a flake does not convert a registry-image
 workload into a Nix-built image. Locks are explicit; builds refuse implicit
 lock updates. Relative seed and mount paths retain their configuration roots,
@@ -167,7 +167,7 @@ command to paste verbatim. The instance/workload rung stays on
 
 The packaged runtime defaults to `~/.microsandbox/current`, pointing to a
 state generation for the pinned runtime. A nonempty `MSB_HOME` is a separate,
-explicit backend-state override. A tool `--home` does not relocate every backend
+explicit backend-state override. A tool `--config` does not relocate every backend
 root or erase inherited backend configuration. Generation convergence and live
 migration are explicit operations, not consequences of a build or shell entry.
 
@@ -208,8 +208,8 @@ The ladder alternatives (`--all`, `--context <ctx>`, `--config-ref <ref>`,
 
 | Area | Commands and purpose |
 | :--- | :--- |
-| Home | `home init`; `home clone <src> [dest]`; `migrate-home` for the documented legacy layout migration. These mutate state. |
-| Config | `config add <url> <name>`; `config new <name> [dest]`; `config update [name]`; `config list`; `config trust <dir>`. Updating refuses dirty clones; trust explicitly enables project layers. |
+| Config | `config init`; `config clone <src> [dest]`; `migrate-config` for the documented legacy layout migration. These mutate state. |
+| Fleet | `fleet add <url> <name>`; `fleet new <name> [dest]`; `fleet update [name]`; `fleet list`; `fleet trust <dir>`. Updating refuses dirty clones; trust explicitly enables project layers. |
 | Sources | `source clone`, `source build`, `source list`, `source reset` manage source checkouts. Review mutation/reset scope before use. |
 | Diagnostics | `check`, `doctor`, `versions` inspect layout, provisioning, and selected pins. |
 | Schema | `validate-config`, `secrets-schema`, `generate-env-example`, `generate-schema`, `schemas update`. These have different output/write behavior; inspect command help. |
@@ -227,23 +227,23 @@ scripts target Debian/Ubuntu. The introductory workflow is in
 prerequisites. Sizing depends on the workload, image builds, and retained Nix
 store; minimum estimates are not capacity guarantees for a real fleet.
 
-Once the host is provisioned, provision the tool home with a config repo
-attached, then pair `--home` (WHERE the registry lives) with `--config`
+Once the host is provisioned, provision the config with a fleet
+attached, then pair `--config` (WHERE the registry lives) with `--fleet`
 (WHICH registered config to target) on every secrets command:
 
 ```sh
-workestrate home init --config <your-config-repo-url> --name personal
-# Second machine from an existing home:
-# workestrate home clone <src-home-or-git-url> [dest-dir]
-workestrate --home <tool-home-path> config list
+workestrate config init --fleet <your-fleet-url> --name personal
+# Second machine from an existing config:
+# workestrate config clone <src-config-or-git-url> [dest-dir]
+workestrate --config <config-path> fleet list
 workestrate context current
 workestrate validate-config
-workestrate --home <tool-home-path> secrets update --config personal
-workestrate secrets init --config personal   # first bootstrap only; use update after
+workestrate --config <config-path> secrets update --fleet personal
+workestrate secrets init --fleet personal   # first bootstrap only; use update after
 workestrate check
 ```
 
-`--home` without `--config` on a `secrets` command selects no target. Enable
+`--config` without `--fleet` on a `secrets` command selects no target. Enable
 a project directory's local layer explicitly with
 `workestrate config trust <dir>`; never trust arbitrary checkouts.
 
@@ -255,22 +255,22 @@ links independently maintained baseline and communication fixtures.
 
 ## Secrets workflow
 
-Each config repository carries SOPS/age-encrypted `.env.enc` and `.sops.yaml`.
-The optional user-global `$WORKESTRATE_HOME/secrets/.env.local.enc` overlays values
+Each fleet carries SOPS/age-encrypted `.env.enc` and `.sops.yaml`.
+The optional user-global `$WORKESTRATE_CONFIG/secrets/.env.local.enc` overlays values
 per key. Later selected secret layers win; process environment is lowest priority.
 Required variable names belong to the active config's schema, not a fixed list
 of personal providers in this tool README.
 
 ```sh
-workestrate secrets init --config <name>
-workestrate secrets update --config <name>
-workestrate --home <tool-home-path> secrets update --config <name>
-workestrate secrets update --config-dir /path/to/config-repo
+workestrate secrets init --fleet <name>
+workestrate secrets update --fleet <name>
+workestrate --config <config-path> secrets update --fleet <name>
+workestrate secrets update --fleet-dir /path/to/fleet
 ```
 
-`--home` selects WHERE the registry is read from; `--config` (or
-`--config-dir`) selects WHICH target to provision. `--home` without
-`--config` selects no target.
+`--config` selects WHERE the registry is read from; `--fleet` (or
+`--fleet-dir`) selects WHICH target to provision. `--config` without
+`--fleet` selects no target.
 
 `init` creates an age key with mode 0600 when needed, prepares recipients, and
 opens an editor for required values; it refuses to overwrite existing ciphertext.
@@ -280,7 +280,7 @@ registry/file/key overrides; unknown names fail without selecting another target
 
 The default age private key is
 `~/.config/sops/age/ai-workbench-secrets.txt`. It stays on the host, outside
-repositories and the tool home, which may be exposed through workload mounts.
+repositories and the config, which may be exposed through workload mounts.
 Back up the key separately; ciphertext alone cannot recover the secrets. Missing
 keys fail closed. [docs/secrets.md](docs/secrets.md) owns the threat model.
 
@@ -294,7 +294,7 @@ SSH custody has separate runtime acceptance requirements.
 
 ## Worked example: new config to running workload
 
-Start from the setup above (`home init`, `config new personal`). Add two
+Start from the setup above (`config init`, `fleet new personal`). Add two
 workloads to the personal config: a service and a dependent agent that
 discovers it. This is the smallest honest pair: closed egress, one
 host-bound secret, one guest-bound secret, and a `depends_on` edge.
@@ -361,8 +361,8 @@ required = true
 Provision secrets, then inspect before running:
 
 ```sh
-setup-secrets --config personal init
-setup-secrets --config personal update
+setup-secrets --fleet personal init
+setup-secrets --fleet personal update
 workestrate validate-config
 workestrate workload plan my-service
 workestrate workload plan my-agent --show-source
@@ -391,12 +391,12 @@ workestrate down --context personal
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/layering-dark.svg" />
-  <img src="docs/assets/layering-light.svg" width="1200" alt="Configuration layering: reference config, ordered context layers, user-global overrides, then trusted project and local layers. WORKESTRATE_CONFIG_DIR bypasses discovery with a single dev layer." />
+  <img src="docs/assets/layering-light.svg" width="1200" alt="Configuration layering: reference config, ordered context layers, user-global overrides, then trusted project and local layers. WORKESTRATE_FLEET_DIR bypasses discovery with a single dev layer." />
 </picture>
 
 Layer order, lowest to highest precedence: reference config, ordered
 context layers, user-global overrides, trusted project and local layers.
-`WORKESTRATE_CONFIG_DIR` bypasses discovery with a single dev layer
+`WORKESTRATE_FLEET_DIR` bypasses discovery with a single dev layer
 (no merge, no trust).
 
 Secrets note: `GITHUB_TOKEN = true` stays host-bound (guests see a
@@ -456,9 +456,9 @@ explains docs-only selection and the required-check contract. Heavy `nix-ci` run
 are owner/maintainer-triggered, not an agent self-applied label. Prefer these
 sources to a second, easily stale CI implementation description here.
 
-Repository schema checks cover owned templates. Inspect a deployed tool home
-explicitly with `workestrate --home <tool-home-path> schemas update --check`
-(where the registry/schema state of that home is the inspection target);
+Repository schema checks cover owned templates. Inspect a deployed config
+explicitly with `workestrate --config <config-path> schemas update --check`
+(where the registry/schema state of that config is the inspection target);
 consumer homes are not inputs to the repository verification gate.
 
 <a id="flag-glossary"></a>
@@ -470,19 +470,19 @@ different things. Do not merge them. No flag is renamed by this change.
 
 | Flag or variable | Selects | Does not select |
 | :--- | :--- | :--- |
-| `--home <DIR>` | Tool-home root: registry (`config.toml`), overrides, state/store dirs, config-repo checkouts. Highest-precedence `WORKESTRATE_HOME` step. | Which config layers are active; backend runtime state (`MSB_HOME`); full process isolation (see `AGENTS.md`). |
+| `--config <DIR>` | Config root: registry (`config.toml`), overrides, state/store dirs, fleet checkouts. Highest-precedence `WORKESTRATE_CONFIG` step. | Which config layers are active; backend runtime state (`MSB_HOME`); full process isolation (see `AGENTS.md`). |
 | `--context <NAME>` (global) | Active named layer bundle (`[contexts.<name>] layers`), plus the `<ctx>-` slot-prefix namespace. | Which sandbox records `down` stops; the pinned git ref. |
 | `--config-ref <REF>` | Pinned-consumption rung: every git-backed config entry is read at this branch/sha; a branch-shaped ref also feeds context derivation. | A sandbox-record selector (see `down --config-ref`). |
-| `WORKESTRATE_CONFIG_DIR` | Explicit single-layer development/testing bypass, resolved before the registry. | The operator path; the first layer of a merged stack. |
+| `WORKESTRATE_FLEET_DIR` | Explicit single-layer development/testing bypass, resolved before the registry. | The operator path; the first layer of a merged stack. |
 | `down --context <CTX>` | Sandbox records whose record context (primary) or `<ctx>-` slot prefix (corroborating) matches. | The config layer bundle. |
 | `down --config-ref <REF>` | Records whose implied context matches a validated branch-shaped ref; a sha implies nothing and is refused. | The pinned-consumption layer. |
-| `MSB_HOME` | Backend Microsandbox runtime state, separate from the tool home. Packaged default `~/.microsandbox/current`. | Tool-home registry, overrides, or config checkouts. |
+| `MSB_HOME` | Backend Microsandbox runtime state, separate from the config. Packaged default `~/.microsandbox/current`. | Tool-config registry, overrides, or config checkouts. |
 | `WORKESTRATE_INVOKE_CWD` | The operator's invocation directory, captured once at CLI entry and inherited by re-exec'd or detached children. | A live re-resolution of the current working directory. |
 
-Related names that are not these flags: the `home` subcommand (dotfiles-style
-tool-home provisioning), `migrate-home` (one-time legacy XDG consolidation),
-`--config <name>` (which registered config a `secrets` command targets),
-`--config-dir <DIR>` (explicit config directory target), and the `context`
+Related names that are not these flags: the `config` subcommand
+(provisioning), `migrate-config` (one-time legacy XDG consolidation),
+`--fleet <name>` (which registered fleet a `secrets` command targets),
+`--fleet-dir <DIR>` (explicit fleet directory target), and the `context`
 subcommand family (`list | current | use <name>`; contexts are otherwise
 hand-edited in the registry TOML).
 
@@ -518,7 +518,7 @@ Lifecycle readiness/cleanup, mount-policy enforcement, SSH custody, and the full
 agent/memory-service composition have separate outstanding runtime gates. Older
 Pi/Prime startup results and ignored KVM tests do not close those gates.
 
-Fleet-local image flakes and standalone config repositories exist; fleet-level
+Fleet-local image flakes and standalone fleets exist; fleet-level
 importing/pinning of standalone workload repositories is not yet implemented.
 The current `workload new` scaffolder is not directory-mode aware. See the explicit
 limitations in [docs/workloads.md](docs/workloads.md). Shared-store, alternative

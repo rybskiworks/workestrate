@@ -125,10 +125,10 @@ ADRs and are recorded permanently as ADR 0020.
    remains the safety net for non-entitled workloads (who should never have
    `false` anyway). This is the correct reading of ADR 0005's intent.
 
-3. **`run` / `WORKESTRATE_CONFIG_DIR` = document-not-harden, with the
+3. **`run` / `WORKESTRATE_FLEET_DIR` = document-not-harden, with the
    local.toml exception (closes C11, C12, A1).** `workestrate run` giving
    the spawned process full secret access is an intentional operator escape
-   hatch (the operator already has host shell). `WORKESTRATE_CONFIG_DIR`
+   hatch (the operator already has host shell). `WORKESTRATE_FLEET_DIR`
    bypassing trust gating is the Unix env-var-as-root model. Both are
    documented in a holistic trust-model section of the README, with a
    one-time warning when `run` loads more than N secrets. **Exception:**
@@ -155,7 +155,7 @@ dependencies, validation gate.
 ### WP1 — Trust-boundary and path-validation cluster - FIX-NOW - Rust/Sec
 
 **Goal:** restore the config-trust invariant that the ADRs promise. A hostile
-local layer or a compromised upstream config repo must not be able to mount
+local layer or a compromised upstream fleet must not be able to mount
 host files rw, exfiltrate host files into sandbox state, or escape the repo
 directory via `cmd_new`.
 
@@ -216,7 +216,7 @@ trust framework is decorative.
 - **C2:** add `fn validate_env_override(name: &str) -> Result<()>` in
   `workload.rs` (or a new `validators.rs`). Enforce `^[A-Z_][A-Z0-9_]*$`
   AND reject a denylist of process-global names: `HOME`, `USER`, `PATH`,
-  `SHELL`, `PWD`, `SOPS_AGE_KEY_FILE`, `WORKESTRATE_CONFIG_DIR`,
+  `SHELL`, `PWD`, `SOPS_AGE_KEY_FILE`, `WORKESTRATE_FLEET_DIR`,
   `WORKESTRATE_NO_PROJECT_CONFIG`, `WORKESTRATE_CONTEXT`, `AGENTCTL_ROOT`,
   `XDG_*`. Call from `validate_config` so it fails at config load, not at
   plan time.
@@ -334,7 +334,7 @@ disk during eval.
 let configPath = "${configDir}/workestrate.toml"; ...
 ```
 
-  Callers who pass an explicit `configDir` (config-repo flakes via
+  Callers who pass an explicit `configDir` (fleet flakes via
   `buildImagesFromConfig`) keep working; the default bounds the copy to a
   single file. Note: the filter path must be a relative literal so Nix
   tracks it as a source path (no `../..` indirection).
@@ -504,7 +504,7 @@ profile install`; today it errors out.
 **Tests to add:**
 
 - **E1 regression:** integration test that simulates a fresh install:
-  `WORKESTRATE_CONFIG_DIR=<fixture>` + `HOME=<tmp>` + cwd in `/tmp`,
+  `WORKESTRATE_FLEET_DIR=<fixture>` + `HOME=<tmp>` + cwd in `/tmp`,
   `workestrate check` exits 0 and prints `(not in a workbench checkout)`
   rather than erroring.
 
@@ -600,7 +600,7 @@ stale.
 
 - **C11 + C12 (holistic trust model):** add a new "Trust model" section to
   `README.md` stating explicitly:
-  - "Setting `WORKESTRATE_CONFIG_DIR` grants the workestrate process full
+  - "Setting `WORKESTRATE_FLEET_DIR` grants the workestrate process full
     config authority — treat it like setting PATH."
   - "`workestrate run -- <cmd>` loads ALL secrets and exec's `<cmd>` with
     them in env. This is an intentional operator escape hatch (you already
@@ -622,11 +622,11 @@ stale.
   history and will be deleted in a follow-up.` Defer actual deletion to a
   separate sweep.
 - **D12:** rewrite `docs/secrets.md` to reflect the ADR 0018 layering +
-  7-secret schema + `--config`/`--global` setup-secrets flags. Remove the
+  7-secret schema + `--fleet`/`--global` setup-secrets flags. Remove the
   "4 secrets / root-`.env.enc`" framing.
 - **D13:** rewrite the README resolution-order section to match
   `config.rs::load_config` exactly: reference < context layers (in
-  declared order) < user-global `[global]` < user-global `[configs.<name>]`
+  declared order) < user-global `[global]` < user-global `[fleets.<name>]`
   < trusted project < project local. Add a `workestrate config resolve
   --dump` mention (deferred to backlog per E17) so users can verify.
 
@@ -664,7 +664,7 @@ for setup-secrets; several documented commands don't exist.
   <name>] [--dry-run]` that removes sandbox state
   (`${state_dir}/var/run/<instance>.json`, workspaces for the workload)
   per the spec. `--dry-run` prints what would be removed. Document the
-  safety invariant: never removes config repos or secrets.
+  safety invariant: never removes fleets or secrets.
 - **E5 (`config remove`):** implement `workestrate config remove <name>`
   that removes the entry from the registry and deletes the managed clone
   at `${store_dir}/repos/<name>/`. Refuses if `<name>` is in the active
@@ -684,7 +684,7 @@ for setup-secrets; several documented commands don't exist.
 **Tests to add:**
 
 - **A7:** `cargo test` for `workestrate config-dir` output across
-  `--global`, `--config <name>`, default modes; shell test that
+  `--global`, `--fleet <name>`, default modes; shell test that
   `setup-secrets.sh --config team init` writes to `team.env.enc` when the
   registry declares it.
 - **E4-E6, E8:** unit tests over the registry mutation functions; one
@@ -727,7 +727,7 @@ recipe layer.
   resolve them via a flake input (preferred — pure). NOTE: `builtins.getFlake`
   (impure) was considered and rejected; see docs/nix-purity.md rule 6 and
   docs/migration/nix-store-gc-remediation-spec.md. Document
-  that config-repo flakes must add the source flake as an input.
+  that fleet flakes must add the source flake as an input.
 - **B10 (tempest npmDepsHash placeholder):** run `nix run
   nixpkgs#prefetch-npm-deps -- agents/tempest/repo/package-lock.json` on
   a host and replace the `sha256-AAAA...` placeholder at `flake.nix:143`.
@@ -807,7 +807,7 @@ test -p agentctl` green; concurrent-port test green.
 ### WP11 — Production-path test coverage - FIX-SOON - Tests — DONE (`control/agentctl/tests/production_path.rs` tracked in this consolidation wave)
 
 **Goal:** exercise the production filesystem discovery path (not just
-`WORKESTRATE_CONFIG_DIR`), so trust-gating, local layer, and canonicalization
+`WORKESTRATE_FLEET_DIR`), so trust-gating, local layer, and canonicalization
 are actually tested.
 
 **Severity:** FIX-SOON. Test fidelity is the root cause of multiple missed
@@ -820,9 +820,9 @@ listed under those WPs.
 
 - **A21:** add `control/agentctl/tests/production_discovery.rs` that:
   - Spins up a tmpdir HOME + tmpdir cwd.
-  - Writes a registry with a trusted project + a config repo fixture.
+  - Writes a registry with a trusted project + a fleet fixture.
   - Writes `workestrate.toml` and `workestrate.local.toml` at cwd.
-  - Invokes `load_config()` (NOT via `WORKESTRATE_CONFIG_DIR`) and asserts:
+  - Invokes `load_config()` (NOT via `WORKESTRATE_FLEET_DIR`) and asserts:
     which layers loaded, that the trust gate fired, that the local layer
     was/was-not loaded per trust state.
   - Covers the four discovery branches: env var, context layers,
@@ -931,11 +931,11 @@ Drives the WP5/E1 fix shape and the long-term CLI contract.
 
 - **Option A (recommended): document only (plus the local.toml
   hardening already in WP1).** `workestrate run` keeps full secret
-  access; `WORKESTRATE_CONFIG_DIR` keeps trust-bypass authority. README
+  access; `WORKESTRATE_FLEET_DIR` keeps trust-bypass authority. README
   states the model explicitly; `run` warns when loading many secrets.
   **Default-if-silent: A.**
 - **Option B: harden both.** Add a `--full-secrets` confirm flag to `run`;
-  require explicit trust on `WORKESTRATE_CONFIG_DIR`-supplied paths.
+  require explicit trust on `WORKESTRATE_FLEET_DIR`-supplied paths.
   Maximally defensive; breaks the operator-escape-hatch use case and CI
   workflows.
 

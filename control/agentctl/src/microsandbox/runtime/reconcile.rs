@@ -61,7 +61,7 @@ pub struct ReconcileFacts {
 }
 
 /// Resolve the msb home dir (`$MSB_HOME` or `~/.microsandbox/current`),
-/// mirroring `microsandbox_utils::resolve_home` so the dir check matches
+/// mirroring `microsandbox_utils::resolve_config_dir` so the dir check matches
 /// the msb create gate exactly: a non-empty `MSB_HOME` is used verbatim, an
 /// empty value is treated as unset, else the canonical home — now the
 /// `current` generation symlink under `$HOME/.microsandbox` (msb state
@@ -1028,7 +1028,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // ---- msb_home: SDK resolve_home mirror (non-empty verbatim) ----
+    // ---- msb_home: SDK resolve_config_dir mirror (non-empty verbatim) ----
 
     /// A set non-empty MSB_HOME is used verbatim.
     #[test]

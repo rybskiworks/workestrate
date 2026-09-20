@@ -74,8 +74,8 @@ impl Fixture {
             .env("XDG_CONFIG_HOME", self.home.dir.join(".config"))
             .env("XDG_DATA_HOME", self.home.dir.join(".local/share"))
             .env("XDG_STATE_HOME", self.home.dir.join(".local/state"))
-            .env("WORKESTRATE_HOME", self.home.dir.join("work-home"))
-            .env("WORKESTRATE_CONFIG_DIR", &self.config)
+            .env("WORKESTRATE_CONFIG", self.home.dir.join("work-home"))
+            .env("WORKESTRATE_FLEET_DIR", &self.config)
             .env("SOPS_AGE_KEY_FILE", self.home.dir.join("fake-age-key"))
             .env("PROBE_ROOT", &self.home.dir)
             .env(
@@ -262,7 +262,7 @@ fn explicit_context_and_home_are_preserved_in_env_mode() {
             r#"
 [settings]
 default_context = "selected"
-[configs.local]
+[fleets.local]
 url = "{}"
 [contexts.selected]
 layers = ["local"]
@@ -273,12 +273,12 @@ layers = ["local"]
     .unwrap();
     let out = fixture
         .cmd()
-        .env_remove("WORKESTRATE_CONFIG_DIR")
+        .env_remove("WORKESTRATE_FLEET_DIR")
         .env("GH_TOKEN", "synthetic-context")
         .args([
             "--secrets-source",
             "env",
-            "--home",
+            "--config",
             work_home.to_str().unwrap(),
             "--context",
             "selected",

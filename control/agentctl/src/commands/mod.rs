@@ -6,7 +6,7 @@ pub mod control;
 pub mod deps;
 pub mod diagnostics;
 pub mod doctor;
-pub mod home;
+pub mod fleet_cmd;
 pub mod init;
 pub mod lifecycle;
 pub mod migrate;

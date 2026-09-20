@@ -86,9 +86,9 @@ impl IsolatedHome {
         c.env("XDG_DATA_HOME", self.dir.join(".local").join("share"));
         c.env("XDG_STATE_HOME", self.dir.join(".local").join("state"));
         c.env("WORKESTRATE_REFERENCE_CONFIG", "1");
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
+        c.env_remove("WORKESTRATE_FLEET_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_HOME");
+        c.env_remove("WORKESTRATE_CONFIG");
         c.env_remove("WORKESTRATE_CONTEXT");
         c.env_remove("SOPS_AGE_KEY_FILE");
         c.stdin(std::process::Stdio::null());
@@ -113,9 +113,9 @@ impl IsolatedHome {
             .join("config.toml")
     }
 
-    /// Store-clone path for a registered repo name.
-    pub fn repo_dir(&self, name: &str) -> PathBuf {
-        self.store_dir().join("config-repos").join(name)
+    /// Store-clone path for a registered fleet name.
+    pub fn fleet_dir(&self, name: &str) -> PathBuf {
+        self.store_dir().join("fleets").join(name)
     }
 
     /// Write a registry TOML with verbatim content.
@@ -125,11 +125,11 @@ impl IsolatedHome {
         std::fs::write(self.registry_path(), content).expect("write registry");
     }
 
-    /// Write a registry TOML with a single `[configs.<name>]` entry plus
+    /// Write a registry TOML with a single `[fleets.<name>]` entry plus
     /// optional extra per-entry lines.
     pub fn write_registry_entry(&self, name: &str, extra_lines: &str) {
         let content = format!(
-            "[configs.{name}]\nurl = \"https://example.com/repo.git\"\nref = \"main\"\n{extra_lines}"
+            "[fleets.{name}]\nurl = \"https://example.com/repo.git\"\nref = \"main\"\n{extra_lines}"
         );
         self.write_registry(&content);
     }
@@ -138,17 +138,17 @@ impl IsolatedHome {
         std::fs::read_to_string(self.registry_path()).expect("read registry")
     }
 
-    /// Create the repo checkout dir in the store so `dir` exists.
-    pub fn create_repo_dir(&self, name: &str) -> PathBuf {
-        let dir = self.repo_dir(name);
-        std::fs::create_dir_all(&dir).expect("create repo dir");
+    /// Create the fleet checkout dir in the store so `dir` exists.
+    pub fn create_fleet_dir(&self, name: &str) -> PathBuf {
+        let dir = self.fleet_dir(name);
+        std::fs::create_dir_all(&dir).expect("create fleet dir");
         dir
     }
 
     /// Create a clean git repo at the store-clone path for `name`.
-    pub fn create_clean_git_repo(&self, name: &str) -> PathBuf {
-        let dir = self.repo_dir(name);
-        std::fs::create_dir_all(&dir).expect("create repo dir");
+    pub fn create_clean_git_fleet(&self, name: &str) -> PathBuf {
+        let dir = self.fleet_dir(name);
+        std::fs::create_dir_all(&dir).expect("create fleet dir");
         run_git(&dir, &["init"]);
         run_git(&dir, &["config", "user.email", "test@example.com"]);
         run_git(&dir, &["config", "user.name", "Test"]);

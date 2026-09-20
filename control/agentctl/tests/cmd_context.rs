@@ -230,7 +230,7 @@ fn context_current_bare_source() {
         r#"
 layers = []
 
-[configs.personal]
+[fleets.personal]
 url = "https://example.com/repo.git"
 ref = "main"
 "#,

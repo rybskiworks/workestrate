@@ -2,24 +2,24 @@
 //! (SOPS + age), ported from the retired `scripts/setup-secrets.sh` engine.
 //!
 //! Target resolution precedence (exactly one of):
-//! 1. `--config <name>` — registry-backed resolution (shared with
+//! 1. `--fleet <name>` — registry-backed resolution (shared with
 //!    `secrets target`; per-repo `secrets_file`/`age_key_file` overrides
 //!    honored, tilde-expanded; a RELATIVE registry `age_key_file` keeps its
 //!    invocation-cwd meaning). Unknown name = hard error, no fallback.
-//! 2. `--config-dir <dir>` — the directory itself (must exist; never
+//! 2. `--fleet-dir <dir>` — the directory itself (must exist; never
 //!    created; relative paths resolve against the invocation cwd via pure
 //!    Rust path handling — no shell anywhere in this module).
 //! 3. `--global` — `${XDG_CONFIG_HOME:-$HOME/.config}/workestrate` (created
 //!    when missing), secrets file `.env.local.enc`.
-//! 4. `WORKESTRATE_CONFIG_DIR` env, when set.
-//! 5. Auto-detect: exactly one registered config → resolve as `--config`.
+//! 4. `WORKESTRATE_FLEET_DIR` env, when set.
+//! 5. Auto-detect: exactly one registered fleet → resolve as `--fleet`.
 //! 6. Fallback: a `.sops.yaml` in the invocation cwd → the cwd itself.
 //!
-//! After resolution the command points `WORKESTRATE_CONFIG_DIR` at the
+//! After resolution the command points `WORKESTRATE_FLEET_DIR` at the
 //! target dir so `config::load_config()` (required-keys schema) and the
-//! env-example generator reflect the TARGET repo's workestrate.toml — the
+//! env-example generator reflect the TARGET fleet's workestrate.toml — the
 //! in-process equivalent of the script's `cd $TARGET_DIR; export
-//! WORKESTRATE_CONFIG_DIR=$PWD`.
+//! WORKESTRATE_FLEET_DIR=$PWD`.
 //!
 //! Secret values are never accepted via argv and never printed: they move
 //! through process env, stdin, a mode-0600 temp buffer, and sops stdin/argv.
@@ -109,27 +109,27 @@ fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
         });
     }
 
-    if let Some(ref name) = args.config {
+    if let Some(ref name) = args.fleet {
         return resolve_named_target(name);
     }
 
-    if let Some(ref dir) = args.config_dir {
+    if let Some(ref dir) = args.fleet_dir {
         return direct_dir_target(dir);
     }
 
-    if let Ok(dir) = std::env::var("WORKESTRATE_CONFIG_DIR")
+    if let Ok(dir) = std::env::var("WORKESTRATE_FLEET_DIR")
         && !dir.is_empty()
     {
         return direct_dir_target(Path::new(&dir));
     }
 
-    // Auto-detect: exactly one registered config resolves as --config.
+    // Auto-detect: exactly one registered fleet resolves as --fleet.
     // A registry load failure falls through to the cwd `.sops.yaml`
     // fallback below instead of erroring (portable directories without a
     // registry stay usable).
     if let Ok(Some(registry)) = config::load_registry()
-        && registry.configs.len() == 1
-        && let Some(name) = registry.configs.keys().next().cloned()
+        && registry.fleets.len() == 1
+        && let Some(name) = registry.fleets.keys().next().cloned()
     {
         return resolve_named_target(&name);
     }
@@ -147,7 +147,7 @@ fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
     anyhow::bail!("could not locate repo root (.sops.yaml not found)")
 }
 
-/// `--config <name>`: registry-backed resolution. An unknown name is a hard
+/// `--fleet <name>`: registry-backed resolution. An unknown name is a hard
 /// error — never fall back to a guessed location. A RELATIVE registry
 /// `age_key_file` keeps its invocation-cwd meaning (the script resolved it
 /// against `$PWD` before its `cd`; there is no chdir here, so we anchor it
@@ -155,7 +155,7 @@ fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
 fn resolve_named_target(name: &str) -> Result<TargetSpec> {
     let target = resolve_registered_target(name)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "could not resolve config '{name}'; check --home and the registered config name"
+            "could not resolve fleet '{name}'; check --fleet and the registered fleet name"
         )
     })?;
     let dir = absolutize(&target.dir)?;
@@ -175,15 +175,15 @@ fn direct_dir_target(dir: &Path) -> Result<TargetSpec> {
     })
 }
 
-/// Point `WORKESTRATE_CONFIG_DIR` at the resolved target dir so the
+/// Point `WORKESTRATE_FLEET_DIR` at the resolved target dir so the
 /// config-driven steps below (required-keys schema, env-example generation)
-/// see the TARGET repo's workestrate.toml.
+/// see the TARGET fleet's workestrate.toml.
 #[allow(unsafe_code)]
 fn export_target_config_dir(dir: &Path) {
     // SAFETY: command-entry write-once override, set before any config load
     // in this flow and before any spawned tasks mutate env; no concurrent
     // mutation of this key (same pattern as the main.rs startup overrides).
-    unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", dir) };
+    unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", dir) };
 }
 
 /// The required key set: the config `secrets` env_var names (same source as
@@ -355,7 +355,7 @@ fn update_sops_config(target: &TargetSpec) -> Result<()> {
     let path = target.sops_config_path();
     let content = std::fs::read_to_string(&path).map_err(|_| {
         anyhow::anyhow!(
-            "{} not found; create it (e.g. 'workestrate config new <name>') before provisioning secrets",
+            "{} not found; create it (e.g. 'workestrate fleet new <name>') before provisioning secrets",
             path.display()
         )
     })?;
@@ -770,7 +770,7 @@ pub fn cmd_secrets_init(args: &SecretsTargetArgs) -> Result<()> {
     let target = resolve_target(args)?;
     if !target.dir.is_dir() {
         anyhow::bail!(
-            "target config directory does not exist: {}",
+            "target fleet directory does not exist: {}",
             target.dir.display()
         );
     }
@@ -900,7 +900,7 @@ pub fn cmd_secrets_update(args: &SecretsTargetArgs) -> Result<()> {
     let target = resolve_target(args)?;
     if !target.dir.is_dir() {
         anyhow::bail!(
-            "target config directory does not exist: {}",
+            "target fleet directory does not exist: {}",
             target.dir.display()
         );
     }
@@ -1254,12 +1254,12 @@ mod tests {
         // yields Ok(None) on first run (no registry file). resolve_target
         // must fall through to the cwd `.sops.yaml` fallback instead of
         // erroring (the permanent fix for the Ok(Some(registry)) match).
-        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
+        use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(HOME_ENV_KEYS);
-        // Empty tool home: no registry file -> Ok(None).
-        let home = uniq_dir("secrets-registry-none-home");
-        std::fs::create_dir_all(&home).unwrap();
+        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
+        // Empty config: no registry file -> Ok(None).
+        let config_dir = uniq_dir("secrets-registry-none-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
         // Cwd fallback dir carrying `.sops.yaml`.
         let cwd = uniq_dir("secrets-registry-none-cwd");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -1267,8 +1267,8 @@ mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held above) for the guard's
         // lifetime; restored by EnvGuard on drop.
         unsafe {
-            std::env::set_var("WORKESTRATE_HOME", &home);
-            std::env::remove_var("WORKESTRATE_CONFIG_DIR");
+            std::env::set_var("WORKESTRATE_CONFIG", &config_dir);
+            std::env::remove_var("WORKESTRATE_FLEET_DIR");
             std::env::set_var("WORKESTRATE_INVOKE_CWD", &cwd);
         }
         assert!(
@@ -1283,7 +1283,7 @@ mod tests {
         // registry auto-detect).
         std::fs::remove_file(cwd.join(".sops.yaml")).unwrap();
         assert!(resolve_target(&SecretsTargetArgs::default()).is_err());
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }

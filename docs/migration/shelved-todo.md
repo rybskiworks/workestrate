@@ -18,7 +18,7 @@
 
 - **What:** A preset registry (e.g. `preset = "github"` expanding to `domains = ["github.com","api.github.com"] port = 443`) was considered and rejected. Only inline `[[policy.egress.allow.domain]]` etc. exist.
 - **Why deferred/dropped:** A preset is a second allowlist with the same governance problem as `ALLOWED_EGRESS_HOSTS`; inline is explicit, reviewable, grep-able, and avoids a registry that must itself be governed. Revisit only if vendor bundles prove ergonomic repetition (e.g. 10 workloads repeating the same 5-domain + port tuple).
-- **Future work if revisited:** Define a preset catalog (likely per-config-repo or home-scoped), with explicit `preset = "github"` → expansion at collect time (before precedence), provenance showing the expansion, and a lint for stale presets. Needs a governance decision (who owns the preset list — operator vs config-repo author). See ADR 0035 §12 row, §13 risks, §14 alternatives.
+- **Future work if revisited:** Define a preset catalog (likely per-fleet or home-scoped), with explicit `preset = "github"` → expansion at collect time (before precedence), provenance showing the expansion, and a lint for stale presets. Needs a governance decision (who owns the preset list — operator vs fleet author). See ADR 0035 §12 row, §13 risks, §14 alternatives.
 
 ### 2. Home-customizable defaults (`on_conflict` default, `final` defaults)
 
@@ -77,12 +77,12 @@
 
 ### C1. `registry.schema.json` + tombi mapping — APPROVED, not shelved
 
-- **What:** `Registry.policy` in `control/agentctl/src/config/registry.rs` already derives `schemars::JsonSchema` but has no vendored `schemas/registry.schema.json` and no `tombi lint` gate for `<home>/config.toml` / `overrides.toml`.
+- **What:** `Registry.policy` in `control/agentctl/src/config/registry.rs` already derives `schemars::JsonSchema` but has no vendored `schemas/registry.schema.json` and no `tombi lint` gate for `<config>/config.toml` / `overrides.toml`.
 - **Why it is NOT shelved:** APPROVED as committed follow-up (ADR §15 item 7 resolution). Moved from open question to committed.
 - **Implementation (follow-up PR, not deferred):**
   1. `schemars::schema_for!(Registry)` (same pattern as `generate_schema_pair()` in `control/agentctl/src/commands/diagnostics.rs:1017`) → `schemas/registry.schema.json` (vendored).
   2. `workestrate generate-schema --output-registry schemas/registry.schema.json` (+ `workestrate schemas update` distribution).
-  3. **HOME_TOMBI_TOML** — a `tombi.toml` for `<home>` files (distinct from repo `workestrate/tombi.toml`): `[[schemas]] path = "schemas/registry.schema.json" include = ["config.toml", "overrides.toml"]` with `strict = true`. Then `tombi lint` covers home files. See ADR 0035 §12.2, §10, §11.5, `docs/runtime-provisioning.md` companion.
+  3. **HOME_TOMBI_TOML** — a `tombi.toml` for `<config>` files (distinct from repo `workestrate/tombi.toml`): `[[schemas]] path = "schemas/registry.schema.json" include = ["config.toml", "overrides.toml"]` with `strict = true`. Then `tombi lint` covers home files. See ADR 0035 §12.2, §10, §11.5, `docs/runtime-provisioning.md` companion.
 - **Status:** Tracked here and in ADR §15 resolution table as **approved follow-up** (counts as 1 of the 7 dispositions). Design notes §4 item 7 mirrors this.
 
 ---

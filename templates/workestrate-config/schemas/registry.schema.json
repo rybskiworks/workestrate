@@ -1,21 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Registry",
-  "description": "Schema root of the tool-home `registry.toml`: global `[settings]`, the registered config repos (`configs`), the default layer stack (`layers`), named contexts (`contexts`), and the trusted-project list. Written atomically by `config::save_registry`.",
+  "description": "Schema root of the config `registry.toml`: global `[settings]`, the registered fleets (`fleets`), the default layer stack (`layers`), named contexts (`contexts`), and the trusted-project list. Written atomically by `config::save_registry`.",
   "type": "object",
   "properties": {
-    "configs": {
-      "default": {},
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/ConfigRepoEntry"
-      }
-    },
     "contexts": {
       "default": {},
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/Context"
+      }
+    },
+    "fleets": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/FleetEntry"
       }
     },
     "layers": {
@@ -43,8 +43,8 @@
     },
     "settings": {
       "default": {
+        "config_version": null,
         "default_context": null,
-        "home_version": null,
         "image_keep_last": null,
         "state_dir": null,
         "store_dir": null
@@ -82,62 +82,6 @@
           "items": {
             "$ref": "#/definitions/PolicyValue_for_String"
           }
-        }
-      },
-      "additionalProperties": false
-    },
-    "ConfigRepoEntry": {
-      "description": "One registered config repo in the tool-home registry (`[configs.<name>]`). `url` is the clone source (git URL, or a filesystem path for `config new` repos); `ref`/`rev` track the checked-out branch and commit; the `secrets*` fields locate that repo's encrypted secrets material.",
-      "type": "object",
-      "required": [
-        "url"
-      ],
-      "properties": {
-        "age_key_file": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "image_keep_last": {
-          "description": "Per-repo keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): beats the home-settings and built-in-default rungs, loses to a workload capsule `keep_last`. `None` = not configured at this rung.",
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "ref": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "rev": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "secrets": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "secrets_file": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "url": {
-          "type": "string"
         }
       },
       "additionalProperties": false
@@ -287,6 +231,62 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FleetEntry": {
+      "description": "One registered fleet in the config registry (`[fleets.<name>]`). `url` is the clone source (git URL, or a filesystem path for `fleet new` repos); `ref`/`rev` track the checked-out branch and commit; the `secrets*` fields locate that repo's encrypted secrets material.",
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "age_key_file": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_keep_last": {
+          "description": "Per-repo keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): beats the config-settings and built-in-default rungs, loses to a workload capsule `keep_last`. `None` = not configured at this rung.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rev": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secrets_file": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -495,7 +495,7 @@
       "type": "object",
       "properties": {
         "egress": {
-          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (home registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
+          "description": "Hierarchical egress policy fragment (`[policy.egress]`). Collected per rung (config registry, config layers, workload) and compiled by the network policy engine (ADR 0035). Each polarity table (`allow`/`deny`) carries `all` / `final` and array-of-tables entries.",
           "default": null,
           "anyOf": [
             {
@@ -542,7 +542,7 @@
           ]
         },
         "secrets": {
-          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the home registry (`Registry.policy`, operator scope), a workestrate.toml layer (config-repo-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
+          "description": "Secret violation-policy ladder rung (`[policy.secrets]`). The SAME sub-shape is valid at all three policy rungs: the config registry (`Registry.policy`, operator scope), a workestrate.toml layer (fleet-layer rung), and a workload declaration (`[workloads.<name>.policy]` — where a bare directory-mode capsule's top-level `[policy.secrets]` lands). Like `mounts`, this fragment is COLLECTED per scope, never merged (see loading.rs).",
           "default": null,
           "anyOf": [
             {
@@ -554,7 +554,7 @@
           ]
         },
         "ssh": {
-          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (home registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
+          "description": "SSH confinement-policy rung (`[policy.ssh]`). Collected per scope (config registry, config layers, workload capsule — a bare directory-mode capsule's top-level `[policy.ssh]` lands on the workload rung via the workload wrapper), never merged — the same collect-never-merge idiom as the secrets/virtualization ladders.",
           "default": null,
           "anyOf": [
             {
@@ -566,7 +566,7 @@
           ]
         },
         "virtualization": {
-          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (home registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
+          "description": "Nested-virtualization operator seal (`[policy.virtualization]`; ADR 0036 §3). Collected per scope (config registry, config layers, workload capsule), never merged — the same idiom as the secrets/egress ladders. `final` seals a denial, never enables.",
           "default": null,
           "anyOf": [
             {
@@ -642,17 +642,11 @@
       "additionalProperties": false
     },
     "RegistrySettings": {
-      "description": "Tool-wide settings section of the tool-home `registry.toml` (`[settings]`). `default_context` selects the active context when none is given; `store_dir`/`state_dir` override the derived store/state locations.",
+      "description": "Tool-wide settings section of the config `registry.toml` (`[settings]`). `default_context` selects the active context when none is given; `store_dir`/`state_dir` override the derived store/state locations.",
       "type": "object",
       "properties": {
-        "default_context": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "home_version": {
-          "description": "Layout version of the tool home. Absent ⇒ 1 (legacy XDG-derived layout). Set to 2 by `workestrate migrate-home` after consolidating into a single `WORKESTRATE_HOME` (ADR 0023). Purely informational/forward-compat: the [`HomeKind`] resolution already determines the active layout.",
+        "config_version": {
+          "description": "Layout version of the config. Absent ⇒ 1 (legacy XDG-derived layout). Set to 2 by `workestrate migrate-config` after consolidating into a single `WORKESTRATE_CONFIG` (ADR 0023). Purely informational/forward-compat: the [`ConfigDirKind`] resolution already determines the active layout.",
           "default": null,
           "type": [
             "integer",
@@ -661,8 +655,14 @@
           "format": "uint32",
           "minimum": 0.0
         },
+        "default_context": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "image_keep_last": {
-          "description": "Home-wide keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): middle rung of the cascade — beats the built-in default, loses to a config-repo entry and a workload capsule `keep_last`. `None` = not configured at this rung.",
+          "description": "Home-wide keep-last-N rung for nix-layered image tags (ADR 0032 §Image tags, RESOLVED user decision 3): middle rung of the cascade — beats the built-in default, loses to a fleet entry and a workload capsule `keep_last`. `None` = not configured at this rung.",
           "default": null,
           "type": [
             "integer",
@@ -720,11 +720,11 @@
       ]
     },
     "SecretsPolicyFragment": {
-      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then home registry (`Registry.policy.secrets` in `<home>/config.toml`, the operator scope), then each config-repo layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
+      "description": "One rung of the secret violation-policy ladder (`[policy.secrets]`): the fragment declared at the config-registry, fleet-layer, or workload-capsule rung. Resolution walks the rungs authority-ascending — built-in passthrough, then config registry (`Registry.policy.secrets` in `<config>/config.toml`, the operator scope), then each fleet layer's `[policy.secrets]` in stack order, then the workload capsule's `[workloads.<name>.policy.secrets]` — and the per-secret `[secrets.<NAME>] on_violation` entry decides last unless a higher rung is final. This mirrors the mount-policy hierarchy (docs/mount-policy/03-hierarchy-and-precedence.md): later = more specific wins, and `final = true` is a terminal freeze that stops every lower rung (including per-secret entries) from overriding the value resolved at the freezing rung. DEVIATION from mount-policy vocabulary: `final` may appear WITHOUT `on_violation` (mount-policy rules always carry an action) — a bare final freezes whatever the higher rungs resolved so far. There is no frozen-out explain trace (mount-policy's `frozen_out`/`frozen_by`): the resolution provenance records only the deciding rung.",
       "type": "object",
       "properties": {
         "final": {
-          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — config-repo layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
+          "description": "Terminal freeze (mount-policy `final` vocabulary): when true, every lower rung — fleet layers, workload capsules, per-secret entries — is frozen out and cannot override the value resolved at this rung. Defaults to false.",
           "default": false,
           "type": "boolean"
         },
@@ -744,7 +744,7 @@
       "additionalProperties": false
     },
     "SshPolicyFragment": {
-      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the home-registry, config-repo-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
+      "description": "One rung of the SSH confinement-policy ladder (`[policy.ssh]`): the fragment declared at the config-registry, fleet-layer, or workload-capsule rung. Follows the [`SecretsPolicyFragment`] ladder pattern exactly: collected per rung (never merged — no policy field passes through `merge_layers`), resolved authority-ascending, `final` terminally freezing lower rungs (including a bare `final` with no `strict`, which freezes whatever the higher rungs resolved so far).",
       "type": "object",
       "properties": {
         "final": {
@@ -777,7 +777,7 @@
       "additionalProperties": false
     },
     "VirtualizationPolicyFragment": {
-      "description": "`[policy.virtualization]` fragment — the HOME-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (home registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
+      "description": "`[policy.virtualization]` fragment — the config-registry operator seal (ADR 0036 §3, whole-subtree): `allow_nested` grants/restricts, `final` seals. Collected per scope (config registry → config layers → workload capsule), NEVER merged — the same collect-never-merge idiom as the secrets/egress ladders. `final` seals, never enables: a freeze at `allow_nested=false` blocks lower rungs from enabling (fleet-wide ban); `true` grants nothing by itself (the workload still needs an explicit `nested≠off`). Absent fragment = no restriction. Cross-rung freeze is plan-time (`frozen_out` provenance; `up` refuses), NOT a validate-config error (validate stays static, no host I/O).",
       "type": "object",
       "properties": {
         "allow_nested": {

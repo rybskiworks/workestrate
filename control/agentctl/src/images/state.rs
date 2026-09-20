@@ -1,4 +1,4 @@
-//! `state/images.json` — the per-home image build/load record (spec 21 §3.2,
+//! `state/images.json` — the per-config image build/load record (spec 21 §3.2,
 //! §8).
 //!
 //! The record is **advisory, never authoritative** (USER DECISION D1): the msb
@@ -82,7 +82,7 @@ pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
 /// The tag context segment (ADR 0032 §Image tags): the ARMED inline-override
 /// config ref wins (A5 rung 3 — `prime:feat-x` builds
 /// `workestrate-prime:feat-x.<sha>` and moves ONLY the `(name, "feat-x")`
-/// pointer; the home context's pointer never flaps), else the active context
+/// pointer; the config context's pointer never flaps), else the active context
 /// name, else `None` (bare-layers mode → the ctx-less tag form).
 ///
 /// The armed override ref is SLUGIFIED via
@@ -191,8 +191,8 @@ pub struct PointerRecord {
     pub updated_at: String,
 }
 
-/// The config-repo identity embedded in every record (spec §8 `repo`). The
-/// D5 cross-home collision warning (spec §4.3) compares these across records
+/// The fleet identity embedded in every record (spec §8 `repo`). The
+/// D5 cross-config collision warning (spec §4.3) compares these across records
 /// for the same tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoIdentity {
@@ -201,11 +201,11 @@ pub struct RepoIdentity {
     pub name: String,
     /// Registered checkout path, or the declaring dir when unregistered.
     pub path: PathBuf,
-    /// Nearest ancestor containing `flake.nix` (the repo's flake root).
+    /// Nearest ancestor containing `flake.nix` (the fleet's flake root).
     pub flake_root: PathBuf,
 }
 
-/// One record per (config-repo identity, name:tag) — spec §8.
+/// One record per (fleet identity, name:tag) — spec §8.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageRecord {
     pub repo: RepoIdentity,
@@ -225,7 +225,7 @@ pub struct ImageRecord {
     /// [`crate::microsandbox::runtime::time::current_rfc3339_utc`]).
     pub built_at: String,
     pub loaded_at: String,
-    /// Provenance for the D5 cross-home collision warning (spec §8: who
+    /// Provenance for the D5 cross-config collision warning (spec §8: who
     /// loaded this, from where). `loader` is e.g. `workestrate 0.1.0`.
     pub loader: String,
     pub host: String,
@@ -349,7 +349,7 @@ impl ImagesState {
 /// behavior (golden plans, and not-yet-rebuilt homes such as pi/tempest,
 /// keep working until their first post-upgrade ensure writes a pointer).
 ///
-/// Repo matching: when `repo` is `None` (declaring repo not determinable at
+/// Repo matching: when `repo` is `None` (declaring fleet not determinable at
 /// plan time — synthetic/single-file layers), pointers are matched by
 /// name+ctx ACROSS repos; BTreeMap order makes a multi-repo collision
 /// resolve deterministically (lexicographically first key).
@@ -460,8 +460,8 @@ mod tests {
         ImageRecord {
             repo: RepoIdentity {
                 name: "personal".to_string(),
-                path: PathBuf::from("/home/node/.workestrate/config-repos/personal"),
-                flake_root: PathBuf::from("/home/node/.workestrate/config-repos/personal"),
+                path: PathBuf::from("/home/node/.workestrate/fleets/personal"),
+                flake_root: PathBuf::from("/home/node/.workestrate/fleets/personal"),
             },
             attr: "workestrate-pi".to_string(),
             tag: "workestrate-pi:latest".to_string(),
@@ -486,8 +486,8 @@ mod tests {
     "personal#workestrate-pi:latest": {
       "repo": {
         "name": "personal",
-        "path": "/home/node/.workestrate/config-repos/personal",
-        "flake_root": "/home/node/.workestrate/config-repos/personal"
+        "path": "/home/node/.workestrate/fleets/personal",
+        "flake_root": "/home/node/.workestrate/fleets/personal"
       },
       "attr": "workestrate-pi",
       "tag": "workestrate-pi:latest",
@@ -713,7 +713,7 @@ mod tests {
         let cases: Vec<(&str, Option<&str>)> = vec![
             // ctx-less (bare-layers mode).
             ("workestrate-prime", None),
-            // Plain ctx (home context name).
+            // Plain ctx (active context name).
             ("workestrate-prime", Some("personal")),
             // Slugified branch ctx with dashes.
             ("workestrate-prime", Some("migration-tool-model")),
@@ -793,8 +793,8 @@ mod tests {
     "personal#workestrate-pi:latest": {
       "repo": {
         "name": "personal",
-        "path": "/home/node/.workestrate/config-repos/personal",
-        "flake_root": "/home/node/.workestrate/config-repos/personal"
+        "path": "/home/node/.workestrate/fleets/personal",
+        "flake_root": "/home/node/.workestrate/fleets/personal"
       },
       "attr": "workestrate-pi",
       "tag": "workestrate-pi:latest",
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     /// Under an armed override, resolution moves to the OVERRIDE-ctx pointer
-    /// and never touches the home-ctx pointer (the home pointer never flaps).
+    /// and never touches the config-ctx pointer (the config pointer never flaps).
     #[test]
     fn resolve_image_tag_under_armed_override_uses_the_override_ctx_pointer() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
@@ -1029,7 +1029,7 @@ mod tests {
         );
         state.save(&state_dir).expect("save");
 
-        // Home context: the home-ctx pointer resolves.
+        // Home context: the config-ctx pointer resolves.
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
             "workestrate-prime:personal.111111111111"
@@ -1040,9 +1040,9 @@ mod tests {
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
             "workestrate-prime:feat-x.222222222222",
-            "the armed override resolves the override-ctx pointer, not the home one"
+            "the armed override resolves the override-ctx pointer, not the config one"
         );
-        // And the home pointer record itself is untouched (never flaps).
+        // And the config pointer record itself is untouched (never flaps).
         let state = ImagesState::load(&state_dir);
         assert_eq!(
             state

@@ -4,7 +4,7 @@ schema_version = 1
 
 # Synthetic reference config. This is a machine-independent fixture that
 # exercises every recipe type and policy feature the core understands. It is
-# NOT a real deployment; user deployments live in personal config repos.
+# NOT a real deployment; user deployments live in personal fleets.
 #
 # Cleanup phase 2: every workload here is a synthetic `example-*` placeholder
 # (generic public images only — no real product images, no mounts into
@@ -14,7 +14,7 @@ schema_version = 1
 
 # Sensitive-path defaults (spec 22 §9). These are the lowest-scope reference
 # defaults: every workload under config.reference inherits them, and any
-# later scope (config-repo / workload layer) may relax them via `read.allow`
+# later scope (fleet / workload layer) may relax them via `read.allow`
 # carve-outs. Every entry is non-final (the default) — `final = true` would
 # freeze an entry against ALL later scopes, and an OPERATOR scope's final
 # read.deny entry compiles to the protect wire bucket (invisible AND
@@ -36,7 +36,7 @@ deny = [
 # Secret violation-policy ladder (secrets edition of the mount-policy
 # hierarchy, docs/mount-policy/03-hierarchy-and-precedence.md): the effective
 # per-secret on_violation is resolved authority-ascending — built-in
-# passthrough < home registry config.toml [policy.secrets] (operator) <
+# passthrough < config registry config.toml [policy.secrets] (operator) <
 # this layer's [policy.secrets] < [workloads.<name>.policy.secrets] <
 # per-secret [secrets.<NAME>] on_violation. `final = true` freezes the value
 # so every lower rung (including per-secret entries) cannot override it.
@@ -98,7 +98,7 @@ hosts = ["github.com"]
 users = ["git"]
 # ports = [22]  # absent = [22] (defaults-after-merge)
 
-# Machine-identity SSH grant shape for consumer config repos (codex /
+# Machine-identity SSH grant shape for consumer fleets (codex /
 # prime-agent / pi wire this name via [workloads.<name>.credentials]
 # ssh = ["github-machine-identity"] plus a github.com:22 egress allowance;
 # those workloads live outside this repo, so like `deploy` above this entry
@@ -239,7 +239,7 @@ scope = "local"
 # required = true refuses at plan time (discovery.rs resolve_depends_on),
 # which would break golden generation. The fixture deliberately exercises the
 # declared-port convention-fallback path instead; real deployments (personal
-# config repos) use required = true per spec 12 §4.
+# fleets) use required = true per spec 12 §4.
 [workloads.example-service.depends_on.example-litellm]
 env = "LITELLM_ADDR"
 required = false
@@ -255,7 +255,7 @@ on_conflict = "reuse"
 # depends_on.<dep>.instance (ADR 0030 Phase 2; COMMENTED — the default below
 # is the current behavior, so no reference entry declares it): which instance
 # of the dep the dependent selects. "shared" (default) = the dep's singleton
-# slot in the dependent's config-repo NAMESPACE; "scoped" = a dep instance
+# slot in the dependent's fleet NAMESPACE; "scoped" = a dep instance
 # named after the dependent's instance id; "fresh" = a fresh auto-slugged dep
 # instance per start (scoped/fresh dep AUTO-START is a P2.1 follow-up; the
 # `--use <dep>@<id>` selection path works today):

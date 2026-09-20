@@ -21,7 +21,7 @@ instructions, not an architectural onboarding requirement for every agent.
 | [Getting started](getting-started.md) | Initial build, operator setup, and secrets entry points. |
 | [Nix build ownership](nix-build.md) | Toolchain inputs, SDK pairing, packaging, and verification entry points. |
 | [Nix purity](nix-purity.md) / [devshell rules](nix/devshells.md) | Source/build separation and shell behavior. |
-| [Workload layouts](workloads.md) | Standalone config repositories, fleet capsules, image ownership, and current composition limits. |
+| [Workload layouts](workloads.md) | Standalone fleets, fleet capsules, image ownership, and current composition limits. |
 | [Operating model](operating-model.md) | Instances, addressing, teardown, and operational scope. |
 | [Event agents](event-agents.md) | Event-driven agent workloads: the tool contract, fleet placement, and the host-side response pattern. |
 | [Runtime provisioning](runtime-provisioning.md) | Runtime homes, state generations, build/runtime separation, guest init, and provisioning contracts. |

@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::config::{ConfigFile, ConfigRepoEntry};
+use crate::config::{ConfigFile, FleetEntry};
 use crate::images::detect::{
     DrvEvalError, DrvEvaluator, MsbStoreProbe, NixCliEvaluator, StoreProbe, record_state_for,
 };
@@ -76,24 +76,24 @@ pub struct BuildTarget {
     /// the pre-migration fallback: the §7 nix-absent ladder probes it when
     /// no current-pointer exists yet.
     pub tag: String,
-    /// Config-repo identity (repo_key rule + flake_root) for the record key.
+    /// Fleet identity (repo_key rule + flake_root) for the record key.
     pub repo: RepoIdentity,
     /// The capsule keep-last-N rung (`image.keep_last`, ADR 0032 §Image
     /// tags — RESOLVED user decision 3): the TOP rung of the prune cascade,
-    /// resolved against the repo-entry/settings/default rungs at the
+    /// resolved against the fleet-entry/settings/default rungs at the
     /// prune-on-load trigger point. `None` = not configured on the capsule.
     pub keep_last: Option<u32>,
 }
 
 /// A workload skipped during selection (batch modes report these as notes;
 /// the single-name mode escalates to a hard error — spec §7 "No flake.nix in
-/// the declaring repo" row).
+/// the declaring fleet" row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectSkip {
-    /// The declaring repo has no `flake.nix` ancestor.
+    /// The declaring fleet has no `flake.nix` ancestor.
     NoFlakeRoot {
         workload: String,
-        /// repo_key (registered name or canonical path) — the repo named in
+        /// repo_key (registered name or canonical path) — the fleet named in
         /// the error/note.
         repo_key: String,
         declaring_dir: PathBuf,
@@ -101,7 +101,7 @@ pub enum SelectSkip {
 }
 
 impl SelectSkip {
-    /// The §7 single-target escalation (hard error naming the repo +
+    /// The §7 single-target escalation (hard error naming the fleet +
     /// remediation). Shared by `cmd_workload_build` (single-name scope) and
     /// the phase-E ensure pre-flight (`images::ensure`) so the wording
     /// stays byte-identical across both callers.
@@ -113,9 +113,9 @@ impl SelectSkip {
                 declaring_dir,
             } => format!(
                 "workload '{workload}' declares a nix-layered image, but its declaring \
-                 repo '{repo_key}' ({}) has no flake.nix ancestor — a nix-layered image \
+                 fleet '{repo_key}' ({}) has no flake.nix ancestor — a nix-layered image \
                  build requires a flake root (spec 21 §7); add a flake.nix to the \
-                 config repo, or load the image manually via the config-repo ritual",
+                 fleet, or load the image manually via the fleet ritual",
                 declaring_dir.display()
             ),
         }
@@ -131,7 +131,7 @@ impl SelectSkip {
                 repo_key,
                 declaring_dir,
             } => format!(
-                "note: skipping workload '{workload}': declaring repo '{repo_key}' ({}) \
+                "note: skipping workload '{workload}': declaring fleet '{repo_key}' ({}) \
                  has no flake.nix ancestor (spec 21 §7)",
                 declaring_dir.display()
             ),
@@ -145,21 +145,21 @@ pub enum BuildScope<'a> {
     Name(&'a str),
     /// bare `build` — all nix-layered workloads in the active context.
     ActiveContext,
-    /// `build --repo <config>` — all nix-layered workloads declared by one
-    /// registered repo.
-    Repo(&'a str),
-    /// `build --all-repos` — all registered repos (`registry.configs`).
-    AllRepos,
+    /// `build --fleet <name>` — all nix-layered workloads declared by one
+    /// registered fleet.
+    Fleet(&'a str),
+    /// `build --all-fleets` — all registered fleets (`registry.fleets`).
+    AllFleets,
 }
 
 /// Pure selector core: filter `config` to the nix-layered eligibility class
 /// (spec §2.3, mirroring `flake_root_requirement`'s predicate) and resolve
-/// each survivor's repo identity from declaring-layer provenance. `only`
+/// each survivor's fleet identity from declaring-layer provenance. `only`
 /// restricts to a single workload name (the `build <name>` form).
 ///
 /// Non-nix-layered workloads are skipped SILENTLY (spec §5.1: "non-nix-layered
 /// workloads in a selected set are skipped"; the zero-eligible note covers
-/// the empty result). A nix-layered workload whose declaring repo has no
+/// the empty result). A nix-layered workload whose declaring fleet has no
 /// `flake.nix` ancestor becomes a [`SelectSkip::NoFlakeRoot`].
 pub fn select_eligible(
     config: &ConfigFile,
@@ -193,7 +193,7 @@ pub fn select_eligible(
         })?;
         let tag = format!("{}:{}", attr, wl.image.tag.as_deref().unwrap_or("latest"));
         // Declaring-layer provenance (spec 17): the layer that declared
-        // `workloads.<name>.image` decides the repo identity — never the
+        // `workloads.<name>.image` decides the fleet identity — never the
         // workload NAME (spec §5.1).
         let layer = provenance
             .get(&format!("workloads.{name}.image"))
@@ -267,39 +267,39 @@ pub fn resolve_targets(scope: BuildScope) -> Result<(Vec<BuildTarget>, Vec<Selec
                 None,
             )
         }
-        BuildScope::Repo(name) => {
+        BuildScope::Fleet(name) => {
             let registry = crate::config::load_registry()?.ok_or_else(|| {
-                anyhow::anyhow!("no config repos registered; run 'workestrate config add' first")
+                anyhow::anyhow!("no fleets registered; run 'workestrate fleet add' first")
             })?;
-            let entry = registry.configs.get(name).ok_or_else(|| {
+            let entry = registry.fleets.get(name).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "config repo '{name}' is not registered; run 'workestrate config list' \
-                     to see registered repos"
+                    "fleet '{name}' is not registered; run 'workestrate fleet list' \
+                     to see registered fleets"
                 )
             })?;
-            targets_for_repo(name, entry, &registered)
+            targets_for_fleet(name, entry, &registered)
         }
-        BuildScope::AllRepos => {
+        BuildScope::AllFleets => {
             let Some(registry) = crate::config::load_registry()? else {
-                // No registry at all → zero repos → zero-eligible no-op.
+                // No registry at all → zero fleets → zero-eligible no-op.
                 return Ok((Vec::new(), Vec::new()));
             };
-            let mut names: Vec<&String> = registry.configs.keys().collect();
+            let mut names: Vec<&String> = registry.fleets.keys().collect();
             names.sort();
             let mut targets = Vec::new();
             let mut skips = Vec::new();
             for name in names {
-                // Batch posture (§7 spirit): a repo that cannot be loaded or
+                // Batch posture (§7 spirit): a fleet that cannot be loaded or
                 // merged (e.g. it fails the current policy gates standalone)
-                // is skipped with a note naming the repo; the REST of the
-                // batch proceeds. Explicit `--repo <name>` hard-errors on the
-                // same failure (the operator asked for that repo).
-                match targets_for_repo(name, &registry.configs[name], &registered) {
+                // is skipped with a note naming the fleet; the REST of the
+                // batch proceeds. Explicit `--fleet <name>` hard-errors on the
+                // same failure (the operator asked for that fleet).
+                match targets_for_fleet(name, &registry.fleets[name], &registered) {
                     Ok((t, s)) => {
                         targets.extend(t);
                         skips.extend(s);
                     }
-                    Err(e) => eprintln!("note: skipping config repo '{name}': {e:#}"),
+                    Err(e) => eprintln!("note: skipping fleet '{name}': {e:#}"),
                 }
             }
             Ok((targets, skips))
@@ -307,36 +307,36 @@ pub fn resolve_targets(scope: BuildScope) -> Result<(Vec<BuildTarget>, Vec<Selec
     }
 }
 
-/// One registered repo's contribution (the `--repo`/`--all-repos` unit):
-/// load the repo's OWN layers (its declarations, not the active-context
+/// One registered fleet's contribution (the `--fleet`/`--all-fleets` unit):
+/// load the fleet's OWN layers (its declarations, not the active-context
 /// merge), then the pure selector core.
-fn targets_for_repo(
+fn targets_for_fleet(
     name: &str,
-    entry: &ConfigRepoEntry,
+    entry: &FleetEntry,
     registered: &[(String, PathBuf)],
 ) -> Result<(Vec<BuildTarget>, Vec<SelectSkip>)> {
     let checkout = if let Some(dir) = crate::config::local_entry_checkout_dir(entry) {
         dir
     } else {
-        crate::config::config_repo_dir(name)
+        crate::config::fleet_dir(name)
     };
     if !checkout.is_dir() {
         eprintln!(
-            "note: config repo '{name}' checkout {} is missing; skipping it",
+            "note: fleet '{name}' checkout {} is missing; skipping it",
             checkout.display()
         );
         return Ok((Vec::new(), Vec::new()));
     }
-    let layers = crate::config::loading::load_config_repo_layers(name, &checkout)
-        .with_context(|| format!("failed to load config repo '{name}'"))?;
+    let layers = crate::config::loading::load_fleet_layers(name, &checkout)
+        .with_context(|| format!("failed to load fleet '{name}'"))?;
     if layers.is_empty() {
-        // A repo with no config content declares nothing — zero-eligible.
+        // A fleet with no config content declares nothing — zero-eligible.
         return Ok((Vec::new(), Vec::new()));
     }
     let layer_dirs = crate::merge::layer_dirs_from(&layers);
     let source_dirs = crate::merge::layer_source_dirs_from(&layers);
     let (config, provenance) = crate::merge::merge_layers(&layers)
-        .with_context(|| format!("failed to merge config repo '{name}'"))?;
+        .with_context(|| format!("failed to merge fleet '{name}'"))?;
     select_eligible(
         &config,
         &provenance,
@@ -413,7 +413,7 @@ pub struct TargetSeams<
 /// The §7 "nix absent from PATH" ladder report (shared by the out_path and
 /// drvPath eval arms of [`process_target`]): `store` presence decides
 /// degrade-with-note (Present — no record written, nothing trustworthy to
-/// record) vs hard error with the install-nix / config-repo-ritual
+/// record) vs hard error with the install-nix / fleet-ritual
 /// remediation (Gone). `tag` is the best tag nameable without nix — the
 /// computed content tag when the out_path eval succeeded, else the
 /// pointer/legacy fallback.
@@ -443,7 +443,7 @@ fn nix_absent_ladder(target: &BuildTarget, tag: &str, store: StoreTag) -> Result
         StoreTag::Gone => Err(anyhow::anyhow!(
             "nix is required to build '{}': no store tag is present and nix was not \
              found on PATH — install nix, or load the image manually via the \
-             config-repo ritual (the declaring repo's 'load-images' recipe), then \
+             fleet ritual (the declaring fleet's 'load-images' recipe), then \
              retry (spec 21 §7)",
             tag
         )),
@@ -698,7 +698,7 @@ pub async fn process_target<
                 // (BOTH LoadAction outcomes — the just-loaded tag is
                 // confirmed current either way), INSIDE the still-held
                 // per-tag lock, build mode only. The capsule rung rides the
-                // target; repo/settings rungs resolve from the live registry
+                // target; fleet/settings rungs resolve from the live registry
                 // (unreadable → defaults, the advisory posture). Cleanup
                 // never fails the load: per-tag failures aggregate into one
                 // stderr note inside prune_on_load.
@@ -706,7 +706,7 @@ pub async fn process_target<
                 let settings_rung = registry.as_ref().and_then(|r| r.settings.image_keep_last);
                 let repo_rung = registry
                     .as_ref()
-                    .and_then(|r| r.configs.get(&target.repo.name))
+                    .and_then(|r| r.fleets.get(&target.repo.name))
                     .and_then(|e| e.image_keep_last);
                 let keep_last = gc::resolve_keep_last(settings_rung, repo_rung, target.keep_last)?;
                 gc::prune_on_load(
@@ -758,21 +758,21 @@ pub fn print_build_text_to<W: std::io::Write>(
 // Command entry
 // ---------------------------------------------------------------------------
 
-/// `workestrate workload build [name] [--repo <config> | --all-repos]
+/// `workestrate workload build [name] [--fleet <name> | --all-fleets]
 /// [--check] [--force] [--json]` (spec 21 §5.1).
 pub async fn cmd_workload_build(
     name: Option<&str>,
-    repo: Option<&str>,
-    all_repos: bool,
+    fleet: Option<&str>,
+    all_fleets: bool,
     check: bool,
     force: bool,
     json: bool,
 ) -> Result<()> {
-    let scope = match (name, repo, all_repos) {
+    let scope = match (name, fleet, all_fleets) {
         (Some(n), None, false) => BuildScope::Name(n),
         (None, None, false) => BuildScope::ActiveContext,
-        (None, Some(r), false) => BuildScope::Repo(r),
-        (None, None, true) => BuildScope::AllRepos,
+        (None, Some(r), false) => BuildScope::Fleet(r),
+        (None, None, true) => BuildScope::AllFleets,
         // clap's conflicts_with declarations make every other shape
         // unparsable.
         other => unreachable!("clap conflicts guarantee one selector shape; got {other:?}"),
@@ -781,8 +781,8 @@ pub async fn cmd_workload_build(
 
     let (targets, skips) = resolve_targets(scope)?;
     for skip in &skips {
-        // §7 "No flake.nix in the declaring repo": single-name mode HARD
-        // ERRORS naming the repo; batch modes skip-with-note and the rest
+        // §7 "No flake.nix in the declaring fleet": single-name mode HARD
+        // ERRORS naming the fleet; batch modes skip-with-note and the rest
         // of the batch proceeds.
         if single_name {
             anyhow::bail!("{}", skip.hard_error_message());
@@ -852,7 +852,7 @@ mod tests {
 
     // ---- fixtures ----
 
-    /// A repo fixture: `<tmp>/checkout` with a flake.nix, registered as
+    /// A fleet fixture: `<tmp>/checkout` with a flake.nix, registered as
     /// `personal`. Returns (tmp, checkout, registered pairs).
     fn repo_fixture(label: &str) -> (PathBuf, PathBuf, Vec<(String, PathBuf)>) {
         let tmp = unique_state_dir(label);
@@ -922,7 +922,7 @@ mod tests {
                 ),
             ).unwrap();
         }
-        let layers = crate::config::loading::load_config_repo_layers("fleet", repo).unwrap();
+        let layers = crate::config::loading::load_fleet_layers("fleet", repo).unwrap();
         let content_dirs = crate::merge::layer_dirs_from(&layers);
         let source_dirs = crate::merge::layer_source_dirs_from(&layers);
         let (config, provenance) = crate::merge::merge_layers(&layers).unwrap();
@@ -1077,8 +1077,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// §7 "No flake.nix in the declaring repo": the workload becomes a
-    /// NoFlakeRoot skip that names the repo (batch note / single-name hard
+    /// §7 "No flake.nix in the declaring fleet": the workload becomes a
+    /// NoFlakeRoot skip that names the fleet (batch note / single-name hard
     /// error is the caller's escalation).
     #[test]
     fn select_eligible_no_flake_root_is_a_named_skip() {
@@ -1127,14 +1127,19 @@ mod tests {
         );
     }
 
-    // ---- --repo / --all-repos selector resolution (env-backed) ----
+    // ---- --fleet / --all-fleets selector resolution (env-backed) ----
 
-    /// Write a local-path config repo: flake.nix + a file-mode workestrate.toml
+    /// Write a local-path fleet: flake.nix + a file-mode workestrate.toml
     /// declaring `wl_name` (nix-layered). `bad_config` writes the REMOVED
     /// `entitlements` key (unknown field via `deny_unknown_fields`) so the
-    /// repo's standalone load FAILS (the --all-repos skip leg).
-    fn write_local_repo(home: &Path, repo: &str, wl_name: &str, bad_config: bool) -> PathBuf {
-        let dir = home.join("repos").join(repo);
+    /// fleet's standalone load FAILS (the --all-fleets skip leg).
+    fn write_local_fleet(
+        config_dir: &Path,
+        fleet: &str,
+        wl_name: &str,
+        bad_config: bool,
+    ) -> PathBuf {
+        let dir = config_dir.join("fleets").join(fleet);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("flake.nix"), "{}\n").unwrap();
         let extra = if bad_config {
@@ -1154,36 +1159,33 @@ mod tests {
         dir
     }
 
-    /// Registry fixture: `layers = []` + local-path `[configs.<repo>]` entries.
-    fn write_registry(home: &Path, repos: &[(&str, &Path)]) {
+    /// Registry fixture: `layers = []` + local-path `[fleets.<name>]` entries.
+    fn write_registry(config_dir: &Path, fleets: &[(&str, &Path)]) {
         let mut content = "layers = []\n".to_string();
-        for (name, dir) in repos {
-            content.push_str(&format!(
-                "\n[configs.{name}]\nurl = \"{}\"\n",
-                dir.display()
-            ));
+        for (name, dir) in fleets {
+            content.push_str(&format!("\n[fleets.{name}]\nurl = \"{}\"\n", dir.display()));
         }
-        std::fs::write(home.join("config.toml"), content).unwrap();
+        std::fs::write(config_dir.join("config.toml"), content).unwrap();
     }
 
-    /// `--repo <name>` resolves that repo's nix-layered workloads against the
-    /// repo's OWN layers; an unregistered name and a policy-failing repo are
+    /// `--fleet <name>` resolves that fleet's nix-layered workloads against the
+    /// fleet's OWN layers; an unregistered name and a policy-failing fleet are
     /// HARD ERRORS (explicit scope).
     #[test]
-    fn repo_scope_resolves_registered_repo_and_hard_errors() {
+    fn fleet_scope_resolves_registered_fleet_and_hard_errors() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
-        let home = unique_state_dir("build-repo-scope-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let good = write_local_repo(&home, "good", "pi", false);
-        let bad = write_local_repo(&home, "bad", "evil", true);
-        write_registry(&home, &[("good", &good), ("bad", &bad)]);
+        let config_dir = unique_state_dir("build-fleet-scope-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let good = write_local_fleet(&config_dir, "good", "pi", false);
+        let bad = write_local_fleet(&config_dir, "bad", "evil", true);
+        write_registry(&config_dir, &[("good", &good), ("bad", &bad)]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
 
-        let (targets, skips) = resolve_targets(BuildScope::Repo("good")).unwrap();
+        let (targets, skips) = resolve_targets(BuildScope::Fleet("good")).unwrap();
         assert!(skips.is_empty());
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "pi");
@@ -1193,51 +1195,51 @@ mod tests {
         );
         assert_eq!(targets[0].repo.flake_root, good.canonicalize().unwrap());
 
-        let err = resolve_targets(BuildScope::Repo("bad"))
-            .expect_err("a repo failing the config gates hard-errors under explicit --repo");
+        let err = resolve_targets(BuildScope::Fleet("bad"))
+            .expect_err("a fleet failing the config gates hard-errors under explicit --fleet");
         assert!(
             format!("{err:#}").contains("entitlements"),
             "the removed entitlements key surfaces in the chain: {err:#}"
         );
 
-        let err = resolve_targets(BuildScope::Repo("nosuch"))
-            .expect_err("unregistered repo is a hard error");
+        let err = resolve_targets(BuildScope::Fleet("nosuch"))
+            .expect_err("unregistered fleet is a hard error");
         assert!(
             err.to_string().contains("'nosuch' is not registered"),
-            "names the repo + remediation: {err}"
+            "names the fleet + remediation: {err}"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 
-    /// `--all-repos` iterates every registered repo; a repo whose standalone
+    /// `--all-fleets` iterates every registered fleet; a fleet whose standalone
     /// load/merge fails is SKIPPED WITH A NOTE and the rest of the batch
     /// proceeds (documented batch posture).
     #[test]
-    fn all_repos_skips_a_failing_repo_and_proceeds() {
+    fn all_fleets_skips_a_failing_fleet_and_proceeds() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
-        let home = unique_state_dir("build-all-repos-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let good = write_local_repo(&home, "good", "pi", false);
-        let bad = write_local_repo(&home, "bad", "evil", true);
-        write_registry(&home, &[("good", &good), ("bad", &bad)]);
+        let config_dir = unique_state_dir("build-all-fleets-config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let good = write_local_fleet(&config_dir, "good", "pi", false);
+        let bad = write_local_fleet(&config_dir, "bad", "evil", true);
+        write_registry(&config_dir, &[("good", &good), ("bad", &bad)]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
 
-        let (targets, skips) =
-            resolve_targets(BuildScope::AllRepos).expect("a failing repo must NOT fail the batch");
-        assert_eq!(targets.len(), 1, "only the good repo contributes");
+        let (targets, skips) = resolve_targets(BuildScope::AllFleets)
+            .expect("a failing fleet must NOT fail the batch");
+        assert_eq!(targets.len(), 1, "only the good fleet contributes");
         assert_eq!(targets[0].name, "pi");
         assert_eq!(targets[0].repo.name, "good");
         assert!(
             skips.is_empty(),
-            "repo-level failure is a note, not a skip row"
+            "fleet-level failure is a note, not a skip row"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 
     // ---- the per-workload flow (skew-in-lock integration, fake seams) ----
@@ -1744,10 +1746,7 @@ mod tests {
         .expect_err("nix absent + tag missing is a hard error (§7)");
         let msg = err.to_string();
         assert!(msg.contains("install nix"), "remediation: {msg}");
-        assert!(
-            msg.contains("load-images"),
-            "config-repo ritual pointer: {msg}"
-        );
+        assert!(msg.contains("load-images"), "fleet ritual pointer: {msg}");
         assert!(msg.contains("img-pi:latest"), "names the tag: {msg}");
 
         // Post-migration fallback: a current-pointer exists → the ladder

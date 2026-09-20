@@ -14,8 +14,7 @@ behavior or create new enforcement guarantees.
 ## Ownership boundaries
 
 **Workestrate is the tool and control plane.** Its Rust implementation is in
-`control/agentctl/`; Nix packaging and image recipes live under `nix/`. A fleet or
-config repository declares workloads and operator policy. A personal provider
+`control/agentctl/`; Nix packaging and image recipes live under `nix/`. A fleet declares workloads and operator policy. A personal provider
 list, agent model catalog or host path is not a universal tool requirement.
 
 **nix-tooling owns shared build inputs.** Workestrate pins one immutable supplier

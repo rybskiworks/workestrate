@@ -36,23 +36,23 @@ pub enum SigningKeyAction {
     Generate {
         /// Environment name storing the key, e.g. MACHINE_GIT_SIGNING_KEY
         name: String,
-        /// Explicit registered config write target, not an effective context
+        /// Explicit registered fleet write target, not an effective context
         #[arg(long, required = true)]
-        config: String,
+        fleet: String,
     },
     /// Print only the public key and fingerprint of an existing signing key
     PublicKey {
         /// Environment name storing the private key
         name: String,
         #[arg(long, required = true)]
-        config: String,
+        fleet: String,
     },
 }
 
 #[derive(Debug, Serialize)]
 struct PublicKeyInfo {
     name: String,
-    config: String,
+    fleet: String,
     secrets_file: PathBuf,
     public_key: String,
     fingerprint: String,
@@ -71,13 +71,13 @@ impl Drop for SecretValues {
 
 pub fn run(action: CredentialAction, json: bool) -> Result<()> {
     let CredentialAction::Signing { action } = action;
-    let (name, config, create) = match action {
-        SigningKeyAction::Generate { name, config } => (name, config, true),
-        SigningKeyAction::PublicKey { name, config } => (name, config, false),
+    let (name, fleet, create) = match action {
+        SigningKeyAction::Generate { name, fleet } => (name, fleet, true),
+        SigningKeyAction::PublicKey { name, fleet } => (name, fleet, false),
     };
     valid_name(&name)?;
-    let target = resolve_secrets_target(&config)?;
-    let info = provision(&target, &name, &config, create)?;
+    let target = resolve_secrets_target(&fleet)?;
+    let info = provision(&target, &name, &fleet, create)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
@@ -170,7 +170,7 @@ fn ciphertext(path: &Path) -> Result<Vec<u8>> {
 fn provision(
     target: &SecretsTarget,
     name: &str,
-    config: &str,
+    fleet: &str,
     create: bool,
 ) -> Result<PublicKeyInfo> {
     disable_core_dumps()?;
@@ -181,7 +181,7 @@ fn provision(
             && Path::new(&target.secrets_file)
                 .components()
                 .all(|c| matches!(c, Component::Normal(_))),
-        "secrets file must be a relative path inside the selected config"
+        "secrets file must be a relative path inside the selected fleet"
     );
     let path = target.dir.join(&target.secrets_file);
     let parent = path.parent().context("secrets file has no parent")?;
@@ -192,7 +192,7 @@ fn provision(
         "age private key must have mode 0600 or stricter"
     );
     let before = ciphertext(&path)
-        .context("initialize this config's encrypted secrets before provisioning a signing key")?;
+        .context("initialize this fleet's encrypted secrets before provisioning a signing key")?;
     let sops = Sops {
         age_key_file: target.age_key_file.clone(),
     };
@@ -200,15 +200,15 @@ fn provision(
     if !create {
         let values = sops.decrypt(&path)?;
         let key = existing_key(&values, name)?;
-        return public_info(&key, name, config, path, false);
+        return public_info(&key, name, fleet, path, false);
     }
 
     // Directory flock serializes these short transactions without creating a
-    // permanent lock artifact in the config repository. Other editors need
+    // permanent lock artifact in the fleet. Other editors need
     // not use this lock; their observed changes are checked before replacement.
     let lock = File::open(parent)?;
     lock.try_lock()
-        .context("another signing-key transaction holds this config directory")?;
+        .context("another signing-key transaction holds this fleet directory")?;
     ensure!(
         ciphertext(&path)? == before,
         "encrypted file changed before key generation; retry"
@@ -264,7 +264,7 @@ fn provision(
     File::open(&staged_path)?.sync_all()?;
     fs::rename(&staged_path, &path).context("could not atomically publish encrypted key")?;
     lock.sync_all().context("encrypted key was saved, but directory durability could not be confirmed; inspect with public-key before retrying")?;
-    public_info(&key, name, config, path, true)
+    public_info(&key, name, fleet, path, true)
 }
 
 #[allow(unsafe_code)]
@@ -297,13 +297,13 @@ fn existing_key(values: &SecretValues, name: &str) -> Result<PrivateKey> {
 fn public_info(
     key: &PrivateKey,
     name: &str,
-    config: &str,
+    fleet: &str,
     path: PathBuf,
     created: bool,
 ) -> Result<PublicKeyInfo> {
     Ok(PublicKeyInfo {
         name: name.into(),
-        config: config.into(),
+        fleet: fleet.into(),
         secrets_file: path,
         public_key: key.public_key().to_openssh()?,
         fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),

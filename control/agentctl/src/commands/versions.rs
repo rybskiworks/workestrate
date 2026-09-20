@@ -285,7 +285,7 @@ pub struct LibkrunfwInfo {
     pub resolved: String,
 }
 
-/// msb store DB schema probe: the home, DB path, and schema marker.
+/// msb store DB schema probe: the config, DB path, and schema marker.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DbSchemaInfo {
     pub home: String,

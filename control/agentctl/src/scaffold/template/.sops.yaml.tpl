@@ -1,4 +1,4 @@
-# SOPS config for {{ config_name }} config repo.
+# SOPS config for {{ config_name }} fleet.
 # Age recipient: personal key.
 # Generate your age key:
 #   age-keygen -o ~/.config/sops/age/ai-workbench-secrets.txt

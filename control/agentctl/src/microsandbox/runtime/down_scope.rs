@@ -3,10 +3,10 @@
 //! for `workestrate down <scope>`.
 //!
 //! Ladder (narrowest → widest): `instance < workload < context (= branch) <
-//! config-ref < home (--all) < everything (--everything, double-gated)`.
+//! config-ref < config (--all) < everything (--everything, double-gated)`.
 //! The instance/workload rungs stay on the per-workload path
 //! (`workload <name> down [--instance|--all-instances]`); THIS module models
-//! the four sweep rungs (context / config-ref / home / everything).
+//! the four sweep rungs (context / config-ref / config / everything).
 //!
 //! Classification engine (§ Cleanup family rules STAND): a target is
 //! workestrate-managed iff registry record ∨ slot-name pattern
@@ -17,7 +17,7 @@
 //! teardown path ([`super::down_hardened`]); per-target outcomes are
 //! reported and ANY failure exits nonzero (§Down scope ladder).
 //!
-//! RETAINED GENERATIONS (msb state generations): the BROAD rungs (home /
+//! RETAINED GENERATIONS (msb state generations): the BROAD rungs (config /
 //! everything) sweep EVERY retained generation home, not just the
 //! currently-resolved one — [`retained_generation_homes`] lists the OTHER
 //! `generations/<key12>` dirs and [`enumerate_generation_dir_candidates`]
@@ -45,9 +45,9 @@ pub enum DownScope {
     /// branch implies. Records carry no config-ref stamp, so v1 config-ref
     /// scope = validated-branch context scope (documented pin).
     ConfigRef(String),
-    /// Home scope: every workestrate-managed target (today's `down --all`,
+    /// Config scope: every workestrate-managed target (today's `down --all`,
     /// now classification-reported).
-    Home,
+    Config,
     /// Everything scope (DOUBLE-GATED): every msb sandbox regardless of
     /// classification; unmanaged candidates are torn down too and reported
     /// with empty evidence.
@@ -61,7 +61,7 @@ impl DownScope {
         match self {
             DownScope::Context(ctx) => format!("context '{ctx}'"),
             DownScope::ConfigRef(r) => format!("config-ref '{r}'"),
-            DownScope::Home => "--all (home)".to_string(),
+            DownScope::Config => "--all (config)".to_string(),
             DownScope::Everything => "everything".to_string(),
         }
     }
@@ -227,7 +227,7 @@ fn dir_listing_names() -> Vec<String> {
 /// resolution (explicit override, legacy root, fresh, ambiguous), the
 /// verbatim [`super::reconcile::msb_home`] — so `current`'s own generation
 /// is never swept twice by the broad down rungs. Empty when no
-/// `generations/` dir exists (unmanaged / legacy single-home posture
+/// `generations/` dir exists (unmanaged / legacy single-config posture
 /// preserved).
 ///
 /// [`generation::resolve_msb_home_generation`]: crate::microsandbox::generation::resolve_msb_home_generation
@@ -276,7 +276,7 @@ pub fn enumerate_generation_dir_candidates(include_unmanaged: bool) -> Vec<Manag
     let mut targets = Vec::new();
     for name in dir_listing_names() {
         // No record store on this side (records belong to the resolved
-        // home's sweep): classify on slot shape + artifact only.
+        // config's sweep): classify on slot shape + artifact only.
         let evidence = classify(&name, None, artifact_log_exists(&name));
         if evidence.is_empty() && !include_unmanaged {
             continue;
@@ -384,14 +384,14 @@ async fn enumerate_targets(
 ///   fail-closed validation ([`validate_config_ref`] at the command
 ///   boundary — records carry no config-ref stamp, so v1 config-ref scope =
 ///   validated-branch context scope).
-/// - [`DownScope::Home`]: every MANAGED target handed in.
+/// - [`DownScope::Config`]: every MANAGED target handed in.
 /// - [`DownScope::Everything`]: every target handed in INCLUDING unmanaged
 ///   ones (pass [`enumerate_all_candidates`]'s output); unmanaged targets
 ///   keep their empty evidence in the report.
 pub fn resolve_scope(scope: &DownScope, targets: &[ManagedTarget]) -> Vec<ManagedTarget> {
     let ctx: Option<&str> = match scope {
         DownScope::Context(c) | DownScope::ConfigRef(c) => Some(c),
-        DownScope::Home | DownScope::Everything => None,
+        DownScope::Config | DownScope::Everything => None,
     };
     targets
         .iter()
@@ -400,7 +400,7 @@ pub fn resolve_scope(scope: &DownScope, targets: &[ManagedTarget]) -> Vec<Manage
             (DownScope::Everything, _) => true,
             // Home: every MANAGED target (defensively excludes zero-evidence
             // candidates should one ever be handed in).
-            (DownScope::Home, _) => !t.evidence.is_empty(),
+            (DownScope::Config, _) => !t.evidence.is_empty(),
             (_, Some(c)) => {
                 if t.evidence.is_empty() {
                     return false;
@@ -439,7 +439,7 @@ pub fn is_sha_like_ref(r: &str) -> bool {
 /// Fail-closed validation of a `--config-ref` scope value (ADR 0032
 /// addendum §Down scope ladder): the ref must be BRANCH-shaped — a
 /// 40-hex sha is refused ("a sha does not imply a context") — and must
-/// resolve against the home's KNOWN refs ([`known_config_refs`]); an
+/// resolve against the config's KNOWN refs ([`known_config_refs`]); an
 /// unknown ref is a hard error LISTING the known refs.
 pub fn validate_config_ref(r: &str, known_refs: &[String]) -> Result<()> {
     if is_sha_like_ref(r) {
@@ -453,8 +453,8 @@ pub fn validate_config_ref(r: &str, known_refs: &[String]) -> Result<()> {
     }
     if known_refs.is_empty() {
         anyhow::bail!(
-            "unknown config ref '{r}': this home knows no refs yet \
-             (register a config repo or run `workestrate config update`)"
+            "unknown config ref '{r}': this config knows no refs yet \
+             (register a fleet or run `workestrate fleet update`)"
         );
     }
     anyhow::bail!(
@@ -463,21 +463,21 @@ pub fn validate_config_ref(r: &str, known_refs: &[String]) -> Result<()> {
     )
 }
 
-/// The home's KNOWN config refs for config-ref validation: registered
+/// The config's KNOWN config refs for config-ref validation: registered
 /// entries' `ref` fields (registry `config.toml`) plus the lockfile's
 /// entry refs and per-entry ref keys (`workestrate.lock` v2). Sorted,
 /// deduped.
 pub fn known_config_refs() -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     if let Some(registry) = crate::config::load_registry()? {
-        for entry in registry.configs.values() {
+        for entry in registry.fleets.values() {
             if let Some(r) = &entry.r#ref {
                 out.push(r.clone());
             }
         }
     }
-    if let Some(lock) = crate::config::lockfile::load_home_lock()? {
-        for repo in lock.repos.values() {
+    if let Some(lock) = crate::config::lockfile::load_config_lock()? {
+        for repo in lock.fleets.values() {
             if let Some(r) = &repo.r#ref {
                 out.push(r.clone());
             }
@@ -512,13 +512,13 @@ pub fn resolve_cli_scope(
         return Ok(DownScope::Context(c.to_string()));
     }
     if all {
-        return Ok(DownScope::Home);
+        return Ok(DownScope::Config);
     }
     anyhow::bail!(
         "`down` needs exactly ONE scope selector — \
-         --all (home) | --context <ctx> | --config-ref <ref> | --everything --everything \
+         --all (config) | --context <ctx> | --config-ref <ref> | --everything --everything \
          (ADR 0032 addendum §Down scope ladder: instance < workload < context < config-ref \
-         < home < everything; per-workload down stays on `workload <name> down`)"
+         < config < everything; per-workload down stays on `workload <name> down`)"
     )
 }
 
@@ -720,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_home_includes_every_managed_target() {
+    fn resolve_config_includes_every_managed_target() {
         let targets = vec![
             target(
                 "personal-litellm",
@@ -731,8 +731,8 @@ mod tests {
             target("legacybox", None, vec![Evidence::ArtifactLog]),
             target("foreignbox", None, vec![]),
         ];
-        let picked = resolve_scope(&DownScope::Home, &targets);
-        assert_eq!(picked.len(), 3, "home = every MANAGED target");
+        let picked = resolve_scope(&DownScope::Config, &targets);
+        assert_eq!(picked.len(), 3, "config = every MANAGED target");
     }
 
     #[test]
@@ -772,7 +772,7 @@ mod tests {
 
     /// A record shaped like a per-dir source-gone instance (source_dir set
     /// to a path that no longer exists — irrelevant to down) must be
-    /// INCLUDED in context/home/everything resolutions. It is an ordinary
+    /// INCLUDED in context/config/everything resolutions. It is an ordinary
     /// record; this pins that a future filter cannot silently drop it.
     #[test]
     fn source_gone_record_is_included_in_every_resolution() {
@@ -789,7 +789,7 @@ mod tests {
             1,
             "context scope includes the source-gone record"
         );
-        assert_eq!(resolve_scope(&DownScope::Home, &targets).len(), 1);
+        assert_eq!(resolve_scope(&DownScope::Config, &targets).len(), 1);
         assert_eq!(resolve_scope(&DownScope::Everything, &targets).len(), 1);
     }
 
@@ -859,7 +859,7 @@ mod tests {
         );
         assert_eq!(
             resolve_cli_scope(true, None, None, 0).unwrap(),
-            DownScope::Home
+            DownScope::Config
         );
         assert_eq!(
             resolve_cli_scope(false, None, None, 1).unwrap(),
@@ -930,7 +930,7 @@ mod tests {
             DownScope::ConfigRef("feat-x".into()).description(),
             "config-ref 'feat-x'"
         );
-        assert_eq!(DownScope::Home.description(), "--all (home)");
+        assert_eq!(DownScope::Config.description(), "--all (config)");
         assert_eq!(DownScope::Everything.description(), "everything");
     }
 
@@ -967,7 +967,7 @@ mod tests {
     /// of a test (mirror of [`MsbHomeGuard`]; restored on drop). Needed
     /// because the artifact-evidence probe resolves the detached log via
     /// `resolve_state_dir()`, whose env override is NOT covered by
-    /// `HOME_ENV_KEYS`.
+    /// `CONFIG_ENV_KEYS`.
     struct StateDirGuard {
         prior: Option<std::ffi::OsString>,
     }
@@ -1129,7 +1129,7 @@ mod tests {
     /// SOURCE-GONE SWEEP PIN (packet item 7): a record shaped like a per-dir
     /// source-gone instance (source_dir recorded, the dir itself absent —
     /// irrelevant to down) enters the enumeration as an ORDINARY record and
-    /// survives into context/home/everything resolutions.
+    /// survives into context/config/everything resolutions.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
     async fn enumerate_managed_includes_source_gone_record_in_all_resolutions() -> anyhow::Result<()>
@@ -1154,7 +1154,7 @@ mod tests {
 
         for scope in [
             DownScope::Context("personal".into()),
-            DownScope::Home,
+            DownScope::Config,
             DownScope::Everything,
         ] {
             let picked = resolve_scope(&scope, &managed);
@@ -1243,7 +1243,7 @@ mod tests {
 
     /// DUAL-MATCHING MUST NOT SWALLOW FOREIGN DIRS: a listing-only dir that
     /// merely LOOKS encoded (matches no record's identity or encoding)
-    /// still appears — managed via its artifact evidence under home scope
+    /// still appears — managed via its artifact evidence under config scope
     /// and listed under everything-enumeration. The log stays in the
     /// LEGACY encoded sandbox dir, pinning the legacy fallback for
     /// listing-only names.
@@ -1288,30 +1288,30 @@ mod tests {
     fn known_config_refs_unions_registry_and_lockfile() -> anyhow::Result<()> {
         use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, uniq_dir};
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _env = EnvGuard::capture(&["WORKESTRATE_HOME"]);
-        let home = uniq_dir("down-scope-refs-home");
-        std::fs::create_dir_all(&home)?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_CONFIG"]);
+        let config_dir = uniq_dir("down-scope-refs-config");
+        std::fs::create_dir_all(&config_dir)?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
 
         // Registry: one entry carrying ref "reg-branch".
         std::fs::write(
-            home.join("config.toml"),
-            "layers = []\n\n[configs.managed]\nurl = \"https://example.invalid/m.git\"\nref = \"reg-branch\"\n",
+            config_dir.join("config.toml"),
+            "layers = []\n\n[fleets.managed]\nurl = \"https://example.invalid/m.git\"\nref = \"reg-branch\"\n",
         )?;
         // Lockfile: entry ref "lock-main" + extra ref key "feat-x".
         std::fs::write(
-            home.join("workestrate.lock"),
+            config_dir.join("workestrate.lock"),
             r#"version = 2
-home_version = 1
+config_version = 1
 tool_version = "test"
 
-[repos.alpha]
+[fleets.alpha]
 url = "https://example.invalid/a.git"
 ref = "lock-main"
 rev = "abc"
 
-[repos.alpha.refs.feat-x]
+[fleets.alpha.refs.feat-x]
 rev = "feat-x"
 sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 fetched_at = "2026-08-26T00:00:00Z"
@@ -1325,7 +1325,7 @@ fetched_at = "2026-08-26T00:00:00Z"
             "registry refs + lockfile entry refs + lockfile ref keys, sorted+deduped"
         );
 
-        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 }

@@ -74,8 +74,8 @@ fn run_check(cwd: &Path, scratch_home: &Path, phase2_opt_in: bool, cwd_opt_in: b
         .env_remove("CARGO_MANIFEST_DIR")
         .env_remove("WORKESTRATE_ALLOW_CWD_REFERENCE")
         .env_remove("WORKESTRATE_REFERENCE_CONFIG")
-        .env_remove("WORKESTRATE_CONFIG_DIR")
-        .env_remove("WORKESTRATE_HOME")
+        .env_remove("WORKESTRATE_FLEET_DIR")
+        .env_remove("WORKESTRATE_CONFIG")
         .env_remove("WORKESTRATE_STATE_DIR")
         // Hermetic home/XDG so no real operator registry leaks in.
         .env("HOME", scratch_home)

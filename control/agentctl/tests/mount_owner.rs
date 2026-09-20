@@ -22,14 +22,14 @@ fn capsule_mount_owner_reaches_json_and_text_plans_without_provisioning() {
         // Read-only sources must already exist; planning must leave it empty.
         std::fs::create_dir_all(&mount_source).unwrap();
         // Directory-mode capsules load through a registered config/context;
-        // WORKESTRATE_CONFIG_DIR accepts only a single workestrate.toml layer.
+        // WORKESTRATE_FLEET_DIR accepts only a single workestrate.toml layer.
         std::fs::write(
             tool_home.join("config.toml"),
             format!(
                 r#"
 [settings]
 default_context = "selected"
-[configs.local]
+[fleets.local]
 url = "{}"
 [contexts.selected]
 layers = ["local"]
@@ -64,7 +64,7 @@ read.deny = ["private/**"]
             let mut cmd = Command::new(BIN);
             cmd.env_clear()
                 .env("HOME", &home.dir)
-                .env("WORKESTRATE_HOME", &tool_home)
+                .env("WORKESTRATE_CONFIG", &tool_home)
                 .env("MSB_HOME", home.dir.join("msb"))
                 .env("PATH", "/nonexistent")
                 .current_dir(&home.dir)

@@ -1,4 +1,4 @@
-//! Integration tests for the home-scope `workestrate down --all`
+//! Integration tests for the config-scope `workestrate down --all`
 //! confirmation (ADR 0032 addendum §Down scope ladder; the former
 //! `down-all` verb survives as a hidden alias). Verifies the single-line
 //! confirm read does not block waiting for EOF: a piped "y\n" proceeds, and
@@ -17,7 +17,7 @@ mod common;
 use common::IsolatedHome;
 use std::process::Stdio;
 /// Piping "y\n" to `down --all` confirms and proceeds without waiting for
-/// EOF. With an empty state dir, the home scope is a no-op and the command
+/// EOF. With an empty state dir, the config scope is a no-op and the command
 /// succeeds.
 #[test]
 fn down_all_piped_yes_proceeds_without_eof() {

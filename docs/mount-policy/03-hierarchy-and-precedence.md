@@ -19,10 +19,10 @@ order, compile.rs:147-149):
 
 | # | Scope (`scope_kind`) | Where declared | Band |
 |---|---|---|---|
-| 1 | `home-registry` | home `config.toml` `[policy.mounts]` | **operator** |
+| 1 | `config-registry` | home `config.toml` `[policy.mounts]` | **operator** |
 | 2 | `user-global-overrides` | `overrides.toml` `[policy.mounts]` | **operator** |
 | 3 | `reference-config` | `config.reference/workestrate.toml` | shipped defaults |
-| 4 | `config-repo-layer` | a config-repo layer's `[policy.mounts]` (registry stack order) | repo |
+| 4 | `fleet-layer` | a fleet layer's `[policy.mounts]` (registry stack order) | fleet |
 | 5 | `workload` | `[workloads.<name>.policy.mounts]` | workload |
 | 6 | `mount-entry` | a `[[workloads.<name>.mounts]]` row's `policy` table or `read.*`/`write.*` sugar | workload |
 
@@ -45,10 +45,10 @@ order, where the LAST matching rule that is not frozen out decides.
 
 ```mermaid
 flowchart TD
-    S1["1 home-registry (operator)"]
+    S1["1 config-registry (operator)"]
     S2["2 user-global-overrides (operator)"]
     S3["3 reference-config"]
-    S4["4 config-repo-layer(s)"]
+    S4["4 fleet-layer(s)"]
     S5["5 workload"]
     S6["6 mount-entry"]
     STREAM["one ordered rule stream per mount"]
@@ -60,7 +60,7 @@ flowchart TD
 ## Precedence rules, precisely
 
 1. **Last non-frozen match wins.** Later scopes relax earlier scopes — a
-   config-repo `read.allow` can re-expose what the reference config denied.
+   fleet `read.allow` can re-expose what the reference config denied.
 2. **A final (terminal) match freezes per-path.** Later rules that match the
    same path are recorded in the `explain` trace with `frozen_out: true` but
    cannot change the decision. The `frozen_by` field names the terminal rule's
@@ -103,7 +103,7 @@ deny = ["**/.env"]
 ```
 
 ```toml
-# config-repo-layer (scope 4) — re-expose the example file
+# fleet-layer (scope 4) — re-expose the example file
 [policy.mounts.read]
 allow = ["**/.env.example"]
 ```
@@ -115,7 +115,7 @@ deny = [{ pattern = "secrets/**", final = true }]
 ```
 
 ```toml
-# home-registry (scope 1, operator) — pin a generated-code tree open against
+# config-registry (scope 1, operator) — pin a generated-code tree open against
 # every later layer.
 [policy.mounts.read]
 allow = [{ pattern = "gen/**", final = true }]

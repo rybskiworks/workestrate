@@ -10,7 +10,7 @@ Control plane CLI for the AI workbench.
 - `workestrate litellm down` — stop and remove the LiteLLM sandbox
 - `workestrate litellm logs` — tail the detached LiteLLM service's log
 - `workestrate pi plan` — print Pi sandbox plan
-- `workestrate pi exec` — attach to the Pi sandbox interactively; execs `/app/bin/pi` (the bun-compile standalone binary built by the config repo flake; npm/node is the fallback). M2: requires KVM.
+- `workestrate pi exec` — attach to the Pi sandbox interactively; execs `/app/bin/pi` (the bun-compile standalone binary built by the fleet flake; npm/node is the fallback). M2: requires KVM.
 - `workestrate pi down` — stop and remove the Pi sandbox
 - `workestrate odysseus plan` — print Odysseus sandbox plan
 - `workestrate odysseus up` — start the Odysseus sandbox (detached; M2: requires KVM)
@@ -38,9 +38,9 @@ nix build .#workestrate
 ```
 
 Workload images (pi bun-compile binary, tempest npm-build tree) are built
-by the config repo flake via the tool's exported lib recipes
+by the fleet flake via the tool's exported lib recipes
 (`lib.buildImagesFromConfig`), not by this repo; load them into the
-microsandbox store from the config repo.
+microsandbox store from the fleet.
 
 ## Development
 

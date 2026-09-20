@@ -78,7 +78,7 @@ pub struct ConfigWorkload {
     /// the program for the relevant guest mount when per-mount transmission is
     /// wired.
     pub(super) mount_policies: Vec<(String, crate::mount_policy::MountPolicyProgram)>,
-    /// The declaring config-repo namespace (ADR 0030 Phase 2 T1): resolved
+    /// The declaring fleet namespace (ADR 0030 Phase 2 T1): resolved
     /// from provenance at construction; the registry-record namespace this
     /// workload's instances register under and depends_on resolution filters
     /// by.
@@ -262,7 +262,7 @@ impl ConfigWorkload {
         let flake_source_dir =
             artifact_flake_source_dir(&workload, &provenance, &source_dirs, name);
 
-        // ADR 0030 Phase 2 T1: the workload's declaring config-repo namespace
+        // ADR 0030 Phase 2 T1: the workload's declaring fleet namespace
         // (from provenance) — the registry-record namespace its instances
         // register under and depends_on resolution filters by. The provenance
         // is passed explicitly (take_provenance drained it above; a second
@@ -331,7 +331,7 @@ impl ConfigWorkload {
                 // post-upgrade ensure writes a pointer).
                 //
                 // Repo matching: `self.namespace` is the declaring
-                // config-repo identity (ADR 0030 P2 T1) — the registered
+                // fleet identity (ADR 0030 P2 T1) — the registered
                 // repo NAME when the declaring layer is under a registered
                 // checkout (matching the pointer key's repo segment), or the
                 // "default" sentinel when no repo identity is resolvable
@@ -476,7 +476,7 @@ fn describe_nested_gap(probe: &crate::microsandbox::nested::NestedProbe) -> &'st
 
 /// ADR 0036 §4 plan half (resolve + warn, never fail): ONE workload's
 /// nested-virt ASK (via the shared [`Workload::virtualization_resolution`])
-/// against the home seal ladder plus the ADVISORY host `probe` (production
+/// against the config seal ladder plus the ADVISORY host `probe` (production
 /// passes `read_nested_probe()`; tests inject mocked probes — no host I/O
 /// in the test matrix). A `require`
 /// the host (or seal) cannot satisfy warns naming provenance ("plan
@@ -502,7 +502,7 @@ fn plan_virtualization_for<W: super::Workload + ?Sized>(
     if refused {
         if let Some(sealed_by) = frozen_by {
             eprintln!(
-                "warning: workload '{}' virtualization.nested=\"{}\" is frozen out by the home [policy.virtualization] seal '{}' (ask from '{}'); plan continues; up will refuse — see ADR 0036 §4",
+                "warning: workload '{}' virtualization.nested=\"{}\" is frozen out by the config [policy.virtualization] seal '{}' (ask from '{}'); plan continues; up will refuse — see ADR 0036 §4",
                 workload.name(),
                 resolution.effective,
                 sealed_by,
@@ -1023,13 +1023,13 @@ mod tests {
     /// (the seal test — validate passes per-rung-legal, plan reports, up
     /// refuses via the shared decision).
     #[test]
-    fn plan_virtualization_home_final_freezes_provenance() {
+    fn plan_virtualization_config_final_freezes_provenance() {
         let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
             .lock()
             .unwrap();
         crate::merge::set_virtualization_ladder(Some(crate::merge::VirtualizationLadder {
-            home: Some((
-                "home-registry".to_string(),
+            config: Some((
+                "config-registry".to_string(),
                 crate::config::VirtualizationPolicyFragment {
                     allow_nested: Some(false),
                     r#final: true,
@@ -1044,7 +1044,7 @@ mod tests {
             plan_virtualization_for(&wl, &crate::microsandbox::nested::NestedProbe::full())
                 .expect("frozen require still returns a plan (never fails)");
         assert!(frozen.frozen_out);
-        assert_eq!(frozen.frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(frozen.frozen_by.as_deref(), Some("config-registry"));
         assert!(!frozen.degraded, "a refused seal is not a degrade");
         crate::merge::set_virtualization_ladder(None);
     }
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn sandbox_instance_name_bare_when_no_context() -> Result<()> {
         let _guard = TestConfigGuard::new();
-        // TestConfigGuard sets WORKESTRATE_CONFIG_DIR which bypasses the registry,
+        // TestConfigGuard sets WORKESTRATE_FLEET_DIR which bypasses the registry,
         // so active_context_name() is None.
         crate::config::set_active_context(None);
         let pi = ConfigWorkload::new("pi")?;
@@ -1122,7 +1122,7 @@ mod tests {
         let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;
         // Simulate an active context after creating the workload; load_config()
-        // resets the active context when WORKESTRATE_CONFIG_DIR is set.
+        // resets the active context when WORKESTRATE_FLEET_DIR is set.
         crate::config::set_active_context(Some(crate::config::ActiveContext {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
@@ -1165,7 +1165,7 @@ guest = 4000
 egress = "deny"
 "#;
 
-    /// RAII guard: point `WORKESTRATE_CONFIG_DIR` at a temp dir holding a
+    /// RAII guard: point `WORKESTRATE_FLEET_DIR` at a temp dir holding a
     /// `workestrate.toml` with `content`, and `WORKESTRATE_STATE_DIR` at a
     /// temp dir acting as the (initially empty) port-registry state home.
     /// Holds the global env lock; both vars are removed on drop.
@@ -1185,7 +1185,7 @@ egress = "deny"
             std::fs::write(config_dir.join("workestrate.toml"), content)
                 .expect("write temp workestrate.toml");
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            unsafe { std::env::set_var("WORKESTRATE_CONFIG_DIR", &config_dir) };
+            unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", &config_dir) };
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
             unsafe { std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir) };
             Self {
@@ -1207,7 +1207,7 @@ egress = "deny"
     impl Drop for DependsEnvGuard {
         fn drop(&mut self) {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
+            unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
             unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
             let _ = std::fs::remove_dir_all(&self.config_dir);
@@ -1320,33 +1320,33 @@ egress = "deny"
 
     // ---- ADR 0030 Phase 2 T1 regression: namespace-matched resolution ----
 
-    /// RAII guard: a temp `WORKESTRATE_HOME` holding a REGISTERED
-    /// directory-mode config repo "personal" (declaring `litellm` + `prime`,
+    /// RAII guard: a temp `WORKESTRATE_CONFIG` holding a REGISTERED
+    /// directory-mode fleet "personal" (declaring `litellm` + `prime`,
     /// the required-dep pair). Unlike `DependsEnvGuard` (a single synthetic
     /// "local" layer whose namespace is always "default"), this exercises the
     /// provenance → layer → repo-key namespace resolution end to end.
     // Field order matters: fields drop in declaration order, so `_env`
-    // restores WORKESTRATE_HOME (EnvGuard::drop) BEFORE `_lock` releases
+    // restores WORKESTRATE_CONFIG (EnvGuard::drop) BEFORE `_lock` releases
     // ENV_TEST_LOCK — no window for a racing lock holder to observe the
     // mutated env.
-    struct RegisteredHomeGuard {
+    struct RegisteredConfigGuard {
         _env: crate::config::test_support::EnvGuard,
         _lock: std::sync::MutexGuard<'static, ()>,
-        home: std::path::PathBuf,
+        config_dir: std::path::PathBuf,
     }
 
-    impl RegisteredHomeGuard {
+    impl RegisteredConfigGuard {
         fn new(label: &str) -> Result<Self> {
-            use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard, HOME_ENV_KEYS, uniq_dir};
+            use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard, uniq_dir};
             let lock = ENV_TEST_LOCK.lock().unwrap();
-            let env = EnvGuard::capture(HOME_ENV_KEYS);
-            let home = uniq_dir(label);
-            std::fs::create_dir_all(&home).expect("create temp home");
+            let env = EnvGuard::capture(CONFIG_ENV_KEYS);
+            let config_dir = uniq_dir(label);
+            std::fs::create_dir_all(&config_dir).expect("create temp config");
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+            unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            unsafe { std::env::remove_var("WORKESTRATE_CONFIG_DIR") };
-            let repo = home.join("config-repos").join("personal");
+            unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+            let repo = config_dir.join("fleets").join("personal");
             let workloads = repo.join("workestrate").join("workloads");
             std::fs::create_dir_all(&workloads)?;
             std::fs::write(
@@ -1356,24 +1356,24 @@ egress = "deny"
             std::fs::write(workloads.join("litellm.toml"), DIR_MODE_LITELLM_TOML)?;
             std::fs::write(workloads.join("prime.toml"), DIR_MODE_PRIME_TOML)?;
             let canonical = repo.canonicalize()?;
-            crate::config::register_config("personal", &canonical.to_string_lossy(), None, None)?;
+            crate::config::register_fleet("personal", &canonical.to_string_lossy(), None, None)?;
             Ok(Self {
                 _env: env,
                 _lock: lock,
-                home,
+                config_dir,
             })
         }
 
-        /// The state dir the runtime resolves under this home
-        /// (`<home>/state`, HomeKind::Env).
+        /// The state dir the runtime resolves under this config
+        /// (`<config>/state`, ConfigDirKind::Env).
         fn state_dir(&self) -> std::path::PathBuf {
-            self.home.join("state")
+            self.config_dir.join("state")
         }
     }
 
-    impl Drop for RegisteredHomeGuard {
+    impl Drop for RegisteredConfigGuard {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.home);
+            let _ = std::fs::remove_dir_all(&self.config_dir);
         }
     }
 
@@ -1406,12 +1406,12 @@ egress = "deny"
         )
     }
 
-    /// A standalone-started service's record (namespace = its declaring repo
+    /// A standalone-started service's record (namespace = its declaring fleet
     /// key) is FOUND by a same-repo dependent's namespace-filtered resolution:
     /// construction succeeds and the plan carries the injected env.
     #[test]
     fn dep_resolution_matches_standalone_record_in_declaring_namespace() -> Result<()> {
-        let guard = RegisteredHomeGuard::new("cw-ns-match")?;
+        let guard = RegisteredConfigGuard::new("cw-ns-match")?;
         register_litellm_record(&guard.state_dir(), "personal")?;
 
         let prime = ConfigWorkload::new("prime")?;
@@ -1432,7 +1432,7 @@ egress = "deny"
     /// the namespace(s) where records exist.
     #[test]
     fn new_refuses_foreign_namespace_record_naming_namespaces() -> Result<()> {
-        let guard = RegisteredHomeGuard::new("cw-ns-refuse")?;
+        let guard = RegisteredConfigGuard::new("cw-ns-refuse")?;
         register_litellm_record(&guard.state_dir(), "default")?;
 
         let err = ConfigWorkload::new("prime").unwrap_err();
@@ -1576,12 +1576,12 @@ egress = "deny"
         let mut dirs = std::collections::HashMap::new();
         dirs.insert(
             "personal#workestrate/workloads/litellm.toml".to_string(),
-            PathBuf::from("/store/config-repos/personal/workestrate/workloads"),
+            PathBuf::from("/store/fleets/personal/workestrate/workloads"),
         );
         assert_eq!(
             field_content_root(Some(&provenance), &dirs, "litellm", "mounts"),
             Some(PathBuf::from(
-                "/store/config-repos/personal/workestrate/workloads"
+                "/store/fleets/personal/workestrate/workloads"
             ))
         );
         // No provenance → None (caller applies the documented fallback).
@@ -1646,7 +1646,7 @@ egress = "deny"
         Ok(())
     }
 
-    /// End-to-end through `ConfigWorkload::new` (WORKESTRATE_CONFIG_DIR
+    /// End-to-end through `ConfigWorkload::new` (WORKESTRATE_FLEET_DIR
     /// single layer named "local"): the content root is the config dir
     /// holding the declaring `workestrate.toml`, and `prepare()` seeds from
     /// it — never from project_root or cwd.
@@ -1971,7 +1971,7 @@ egress = "deny"
     fn prepare_hard_errors_when_seed_content_root_unresolvable() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let old_root = std::env::var("AGENTCTL_ROOT").ok();
         let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
@@ -2809,8 +2809,8 @@ egress = "deny"
 
     // ---- E0 / ADR 0028: F2 gate resolves the flake root location-independently ----
 
-    /// A nix-layered workload declared by a directory-mode config repo: the
-    /// F2 gate resolves the DECLARING repo's flake root even when the cwd is
+    /// A nix-layered workload declared by a directory-mode fleet: the
+    /// F2 gate resolves the DECLARING fleet's flake root even when the cwd is
     /// a flake-less foreign directory (ADR 0028 acceptance 1). Builds a
     /// ConfigWorkload with `mount_content_root` = the repo root (the same
     /// provenance-derived value `ConfigWorkload::new` sets for directory
@@ -2850,13 +2850,13 @@ egress = "deny"
         (repo, wl)
     }
 
-    /// Test (a): the F2 gate resolves the DECLARING repo's flake root from a
+    /// Test (a): the F2 gate resolves the DECLARING fleet's flake root from a
     /// flake-less CWD — the ADR 0028 core fix.
     #[test]
     fn f2_gate_resolves_declaring_repo_flake_root_from_flakeless_cwd() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let (repo, wl) = declaring_repo_fixture("f2-declaring");
         // Foreign, flake-less cwd (not the tool checkout, not the repo).
@@ -2871,7 +2871,7 @@ egress = "deny"
         assert_eq!(
             roots.project_root.expect("nix-layered requires a root"),
             repo.canonicalize()?,
-            "declaring repo's flake root wins over the flake-less cwd"
+            "declaring fleet's flake root wins over the flake-less cwd"
         );
         assert_eq!(
             roots.content_root, repo,
@@ -2884,12 +2884,12 @@ egress = "deny"
     }
 
     /// Test (b): AGENTCTL_ROOT remains the EXPLICIT override — it beats the
-    /// declaring repo when set (and contains flake.nix).
+    /// declaring fleet when set (and contains flake.nix).
     #[test]
     fn f2_gate_agentctl_root_override_wins_over_declaring_repo() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let (repo, wl) = declaring_repo_fixture("f2-override");
         let override_root = crate::config::test_support::uniq_dir("f2-override-root");
@@ -2907,7 +2907,7 @@ egress = "deny"
         assert_eq!(
             roots.project_root.expect("nix-layered requires a root"),
             override_root,
-            "AGENTCTL_ROOT explicit override beats the declaring repo (ADR 0028 §Decision 3)"
+            "AGENTCTL_ROOT explicit override beats the declaring fleet (ADR 0028 §Decision 3)"
         );
 
         let _ = std::fs::remove_dir_all(&repo);
@@ -2923,7 +2923,7 @@ egress = "deny"
     fn f2_gate_synthetic_layer_legacy_error_is_preserved() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let old_root = std::env::var("AGENTCTL_ROOT").ok();
         let old_manifest = std::env::var("CARGO_MANIFEST_DIR").ok();
@@ -2988,7 +2988,7 @@ egress = "deny"
     fn preflight_existence_ok_from_foreign_cwd_for_directory_mode() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let (repo, wl) = declaring_repo_fixture("f2-preflight");
         let foreign = crate::config::test_support::uniq_dir("f2-preflight-cwd");
@@ -3017,12 +3017,12 @@ egress = "deny"
     fn plan_warns_on_overlapping_cwd_and_state_mount_hosts() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let home = crate::config::test_support::uniq_dir("host-overlap-home");
         std::fs::create_dir_all(&home).unwrap();
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_HOME", &home) };
+        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &home) };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_STATE_DIR") };
 
@@ -3098,7 +3098,7 @@ egress = "deny"
     fn plan_resolves_cwd_mount_host_to_captured_invoke_cwd() -> Result<()> {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::HOME_ENV_KEYS,
+            crate::config::test_support::CONFIG_ENV_KEYS,
         );
         let invoke = crate::config::test_support::uniq_dir("plan-invoke-cwd");
         let foreign = crate::config::test_support::uniq_dir("plan-foreign-cwd");

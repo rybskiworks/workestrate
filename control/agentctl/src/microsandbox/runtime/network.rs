@@ -478,7 +478,7 @@ mod tests {
         let _guard = TestConfigGuard::new();
         // The pi-bun binary's PT_INTERP points at nix glibc 2.42; the sandbox
         // image must be the nix-built `workestrate-pi:latest` (built by the
-        // config repo flake and loaded into the msb store there), NOT
+        // fleet flake and loaded into the msb store there), NOT
         // node:24-bookworm-slim (glibc 2.36 → crash).
         let plan = ConfigWorkload::new("pi")?.plan();
         assert_eq!(plan.image.as_deref(), Some("workestrate-pi:latest"));

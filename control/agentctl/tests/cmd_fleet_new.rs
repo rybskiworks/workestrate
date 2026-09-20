@@ -1,4 +1,4 @@
-//! Integration tests for `workestrate config new` — flags, refusal cases,
+//! Integration tests for `workestrate fleet new` — flags, refusal cases,
 //! and side effects. Uses an isolated HOME + XDG_CONFIG_HOME per test so
 //! the user's real workestrate registry is never touched.
 
@@ -30,15 +30,15 @@ fn unique_dest(parent: &Path, label: &str) -> PathBuf {
 /// Invalid names are rejected before any filesystem writes happen.
 #[test]
 fn rejects_invalid_name() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("bad-name-dest");
     let out = home
         .cmd()
-        .args(["config", "new", "Bad Name"])
+        .args(["fleet", "new", "Bad Name"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         !out.status.success(),
         "invalid name should be rejected; got success"
@@ -58,18 +58,18 @@ fn rejects_invalid_name() {
 /// A non-empty destination is refused.
 #[test]
 fn rejects_non_empty_dest() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = unique_dest(&home.dir, "non-empty-dest");
     // Populate with one file to make it non-empty.
     std::fs::write(dest.join("blocker"), "x").expect("seed blocker");
 
     let out = home
         .cmd()
-        .args(["config", "new", "goodname"])
+        .args(["fleet", "new", "goodname"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(!out.status.success(), "non-empty dest should be rejected");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -87,12 +87,12 @@ fn rejects_non_empty_dest() {
 /// `--no-register` skips the registry write.
 #[test]
 fn no_register_skips_registry() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("no-register-dest");
 
     let out = home
         .cmd()
-        .args(["config", "new", "noreg"])
+        .args(["fleet", "new", "noreg"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -101,10 +101,10 @@ fn no_register_skips_registry() {
             "age1TEST",
         ])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         out.status.success(),
-        "config new --no-register failed: stderr=\n{}",
+        "fleet new --no-register failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -128,12 +128,12 @@ fn no_register_skips_registry() {
 /// `--no-git-init` skips `git init` (no .git directory in dest).
 #[test]
 fn no_git_init_skips_git() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("no-git-dest");
 
     let out = home
         .cmd()
-        .args(["config", "new", "nogit"])
+        .args(["fleet", "new", "nogit"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -142,10 +142,10 @@ fn no_git_init_skips_git() {
             "age1TEST",
         ])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         out.status.success(),
-        "config new --no-git-init failed: stderr=\n{}",
+        "fleet new --no-git-init failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
@@ -160,19 +160,19 @@ fn no_git_init_skips_git() {
 /// to age1PLACEHOLDER + a stderr warning.
 #[test]
 fn placeholder_recipient_when_derivation_fails() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("placeholder-dest");
 
     let out = home
         .cmd()
-        .args(["config", "new", "pholder"])
+        .args(["fleet", "new", "pholder"])
         .arg(&dest)
         .args(["--no-register", "--no-git-init"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         out.status.success(),
-        "config new with missing key file failed: stderr=\n{}",
+        "fleet new with missing key file failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -194,20 +194,20 @@ fn placeholder_recipient_when_derivation_fails() {
 /// Already-registered name bails BEFORE writing any files (fail-fast).
 #[test]
 fn already_registered_bails_before_writes() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest2 = home.dir.join("dest2");
 
     // First invocation registers "dupe" (in-store default dest, so
     // registration happens).
     let out1 = home
         .cmd()
-        .args(["config", "new", "dupe"])
+        .args(["fleet", "new", "dupe"])
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
-        .expect("first config new");
+        .expect("first fleet new");
     assert!(
         out1.status.success(),
-        "first config new failed: stderr=\n{}",
+        "first fleet new failed: stderr=\n{}",
         String::from_utf8_lossy(&out1.stderr)
     );
 
@@ -216,11 +216,11 @@ fn already_registered_bails_before_writes() {
     // though an out-of-store dest would not register anyway).
     let out2 = home
         .cmd()
-        .args(["config", "new", "dupe"])
+        .args(["fleet", "new", "dupe"])
         .arg(&dest2)
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
-        .expect("second config new");
+        .expect("second fleet new");
     assert!(!out2.status.success(), "duplicate name should be rejected");
     let stderr = String::from_utf8_lossy(&out2.stderr);
     assert!(
@@ -237,12 +237,12 @@ fn already_registered_bails_before_writes() {
 /// `--json` emits a valid JSON envelope with the expected fields.
 #[test]
 fn json_envelope_is_valid() {
-    let home = IsolatedHome::new("cmd-config-new");
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("json-dest");
 
     let out = home
         .cmd()
-        .args(["config", "new", "jsontest"])
+        .args(["fleet", "new", "jsontest"])
         .arg(&dest)
         .args([
             "--no-register",
@@ -252,10 +252,10 @@ fn json_envelope_is_valid() {
             "--json",
         ])
         .output()
-        .expect("invoke config new --json");
+        .expect("invoke fleet new --json");
     assert!(
         out.status.success(),
-        "config new --json failed: stderr=\n{}",
+        "fleet new --json failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -276,22 +276,22 @@ fn json_envelope_is_valid() {
 }
 
 /// WP-C: default dest is the managed store, not ./<name>. The repo lands
-/// in <store>/config-repos/<name> and a subsequent validate-config (which
+/// in <store>/fleets/<name> and a subsequent validate-config (which
 /// calls
 /// load_config) sees it as a layer.
 #[test]
-fn config_new_default_path_is_store() {
-    let home = IsolatedHome::new("cmd-config-new");
+fn fleet_new_default_path_is_store() {
+    let home = IsolatedHome::new("cmd-fleet-new");
 
-    // Use WORKESTRATE_HOME so the store path is predictable.
+    // Use WORKESTRATE_CONFIG so the store path is predictable.
     let store = home.dir.join(".workestrate");
-    let expected = store.join("config-repos").join("personal");
+    let expected = store.join("fleets").join("personal");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args([
-            "config",
+            "fleet",
             "new",
             "personal",
             "--no-git-init",
@@ -299,10 +299,10 @@ fn config_new_default_path_is_store() {
             "age1TEST",
         ])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         out.status.success(),
-        "config new failed: stderr=\n{}",
+        "fleet new failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -319,10 +319,10 @@ fn config_new_default_path_is_store() {
 
     // A subsequent validate-config must succeed — load_config resolves the
     // active context, finds "personal" in the bare layers list (auto-added
-    // by register_config), and loads the workestrate.toml from the store.
+    // by register_fleet), and loads the workestrate.toml from the store.
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
+        .env("WORKESTRATE_CONFIG", &store)
         .args(["validate-config"])
         .output()
         .expect("invoke validate-config");
@@ -336,23 +336,23 @@ fn config_new_default_path_is_store() {
 /// WP-C: an explicit dest outside the store is scaffolded but NOT
 /// registered; stderr prints the not-registered guidance note.
 #[test]
-fn config_new_explicit_dest_outside_store_not_registered() {
-    let home = IsolatedHome::new("cmd-config-new");
+fn fleet_new_explicit_dest_outside_store_not_registered() {
+    let home = IsolatedHome::new("cmd-fleet-new");
     let store = home.dir.join(".workestrate");
     let dest = home.dir.join("outside-store-dest");
 
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &store)
-        .args(["config", "new", "personal"])
+        .env("WORKESTRATE_CONFIG", &store)
+        .args(["fleet", "new", "personal"])
         .arg(&dest)
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
 
     assert!(
         out.status.success(),
-        "config new with explicit dest should succeed; stderr=\n{}",
+        "fleet new with explicit dest should succeed; stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -363,7 +363,7 @@ fn config_new_explicit_dest_outside_store_not_registered() {
         stderr
     );
     assert!(
-        stderr.contains("workestrate config add"),
+        stderr.contains("workestrate fleet add"),
         "stderr should explain how to activate the repo; got:\n{}",
         stderr
     );
@@ -375,7 +375,7 @@ fn config_new_explicit_dest_outside_store_not_registered() {
     );
     assert!(
         !store
-            .join("config-repos")
+            .join("fleets")
             .join("personal")
             .join("workestrate.toml")
             .exists(),
@@ -394,34 +394,34 @@ fn config_new_explicit_dest_outside_store_not_registered() {
     }
 }
 
-/// FS-25: when WORKESTRATE_HOME contains a symlink component, the default
+/// FS-25: when WORKESTRATE_CONFIG contains a symlink component, the default
 /// in-store dest canonicalizes to a DIFFERENT registered url — the CLI must
 /// emit the "canonicalized path" note on stderr, and the registry records
 /// the canonical form.
 #[cfg(unix)]
 #[test]
-fn config_new_symlinked_home_registers_canonical_url_with_note() {
-    let home = IsolatedHome::new("cmd-config-new");
+fn fleet_new_symlinked_config_registers_canonical_url_with_note() {
+    let home = IsolatedHome::new("cmd-fleet-new");
     let real_store = home.dir.join("fs25-real-store");
     std::fs::create_dir_all(&real_store).expect("create real store");
     let link = home.dir.join("fs25-link");
     std::os::unix::fs::symlink(&real_store, &link).expect("create symlink");
 
-    // WORKESTRATE_HOME via the symlink: config_repo_dir(name) resolves to
-    // the LITERAL path <link>/config-repos/personal, which equals the
+    // WORKESTRATE_CONFIG via the symlink: fleet_dir(name) resolves to
+    // the LITERAL path <link>/fleets/personal, which equals the
     // default dest (so registration still triggers), but canonicalize()
     // rewrites it to the symlink-resolved form.
     let out = home
         .cmd()
-        .env("WORKESTRATE_HOME", &link)
-        .args(["config", "new", "personal"])
+        .env("WORKESTRATE_CONFIG", &link)
+        .args(["fleet", "new", "personal"])
         .args(["--no-git-init", "--age-recipient", "age1TEST"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
 
     assert!(
         out.status.success(),
-        "config new via symlinked WORKESTRATE_HOME should succeed; stderr=\n{}",
+        "fleet new via symlinked WORKESTRATE_CONFIG should succeed; stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -435,7 +435,7 @@ fn config_new_symlinked_home_registers_canonical_url_with_note() {
     // The registry records the CANONICAL (symlink-resolved) url.
     let registry_raw =
         std::fs::read_to_string(real_store.join("config.toml")).expect("read registry");
-    let canonical = std::fs::canonicalize(link.join("config-repos").join("personal")).unwrap();
+    let canonical = std::fs::canonicalize(link.join("fleets").join("personal")).unwrap();
     assert!(
         registry_raw.contains(&canonical.to_string_lossy().to_string()),
         "registry should record the canonical url {}:\n{}",
@@ -445,7 +445,7 @@ fn config_new_symlinked_home_registers_canonical_url_with_note() {
 }
 
 /// Run git in `dir` with the system config disabled; assert success.
-/// (Mirrors the helper idiom in cmd_home_init.rs.)
+/// (Mirrors the helper idiom in cmd_config_init.rs.)
 fn run_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -462,30 +462,30 @@ fn run_git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// Scaffold a config repo with default git-init behavior (no registration)
+/// Scaffold a fleet with default git-init behavior (no registration)
 /// and return its destination path.
-fn scaffold_repo(home: &IsolatedHome, name: &str) -> PathBuf {
+fn scaffold_fleet(home: &IsolatedHome, name: &str) -> PathBuf {
     let dest = home.dir.join(format!("{name}-dest"));
     let out = home
         .cmd()
-        .args(["config", "new", name])
+        .args(["fleet", "new", name])
         .arg(&dest)
         .args(["--no-register", "--age-recipient", "age1TEST"])
         .output()
-        .expect("invoke config new");
+        .expect("invoke fleet new");
     assert!(
         out.status.success(),
-        "config new failed: stderr=\n{}",
+        "fleet new failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     dest
 }
 
-/// `config new` installs the tombi pre-commit hook, executable on unix.
+/// `fleet new` installs the tombi pre-commit hook, executable on unix.
 #[test]
-fn config_new_installs_executable_tombi_hook() {
-    let home = IsolatedHome::new("cmd-config-new");
-    let dest = scaffold_repo(&home, "hooktest");
+fn fleet_new_installs_executable_tombi_hook() {
+    let home = IsolatedHome::new("cmd-fleet-new");
+    let dest = scaffold_fleet(&home, "hooktest");
 
     let hook = dest.join(".git").join("hooks").join("pre-commit");
     assert!(
@@ -507,9 +507,9 @@ fn config_new_installs_executable_tombi_hook() {
 
 /// The installed hook's canonical content references tombi.
 #[test]
-fn config_new_hook_content_mentions_tombi() {
-    let home = IsolatedHome::new("cmd-config-new");
-    let dest = scaffold_repo(&home, "hookcontent");
+fn fleet_new_hook_content_mentions_tombi() {
+    let home = IsolatedHome::new("cmd-fleet-new");
+    let dest = scaffold_fleet(&home, "hookcontent");
 
     let hook = dest.join(".git").join("hooks").join("pre-commit");
     let content = std::fs::read_to_string(&hook).expect("read pre-commit hook");
@@ -569,9 +569,9 @@ fn find_tombi() -> Option<PathBuf> {
 /// Behavioral: the installed hook fails on malformed TOML when tombi is
 /// present, and warns-and-skips (exit 0) when tombi is absent from PATH.
 #[test]
-fn config_new_hook_behavioral() {
-    let home = IsolatedHome::new("cmd-config-new");
-    let dest = scaffold_repo(&home, "hookbehav");
+fn fleet_new_hook_behavioral() {
+    let home = IsolatedHome::new("cmd-fleet-new");
+    let dest = scaffold_fleet(&home, "hookbehav");
     let installed_hook = dest.join(".git").join("hooks").join("pre-commit");
     let hook_content = std::fs::read_to_string(&installed_hook).expect("read installed hook");
 
@@ -593,7 +593,7 @@ fn config_new_hook_behavioral() {
         // The nix-pinned tombi (nix-tooling wrapper) refuses to run at all —
         // including `--version` — without a tombi.toml in scope (walk-up from
         // cwd), which would make the hook's version probe read 'unknown' and
-        // warn-and-skip. Real config repos always carry the scaffolded
+        // warn-and-skip. Real fleets always carry the scaffolded
         // tombi.toml, so give the scratch repo a minimal one to exercise the
         // real gate.
         std::fs::write(repo.join("tombi.toml"), "toml-version = \"v1.0.0\"\n")
@@ -611,7 +611,7 @@ fn config_new_hook_behavioral() {
         );
     } else {
         eprintln!(
-            "cmd_config_new: SKIP tombi-present case — 'tombi' not on PATH \
+            "cmd_fleet_new: SKIP tombi-present case — 'tombi' not on PATH \
              (HOST-NIX gate; mirrors schema_drift.rs bootstrap-skip)."
         );
     }
@@ -643,20 +643,20 @@ fn config_new_hook_behavioral() {
 /// references `#:schema ./schemas/workestrate.schema.json` and the
 /// pre-commit hook runs tombi, so tombi.toml + the schema must not dangle.
 #[test]
-fn config_new_empty_emits_tombi_and_schema_files() {
-    let home = IsolatedHome::new("cmd-config-new");
+fn fleet_new_empty_emits_tombi_and_schema_files() {
+    let home = IsolatedHome::new("cmd-fleet-new");
     let dest = home.dir.join("empty-dest");
 
     let out = home
         .cmd()
-        .args(["config", "new", "emptytest", "--empty"])
+        .args(["fleet", "new", "emptytest", "--empty"])
         .arg(&dest)
         .args(["--no-register", "--age-recipient", "age1TEST"])
         .output()
-        .expect("invoke config new --empty");
+        .expect("invoke fleet new --empty");
     assert!(
         out.status.success(),
-        "config new --empty failed: stderr=\n{}",
+        "fleet new --empty failed: stderr=\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -683,7 +683,7 @@ fn config_new_empty_emits_tombi_and_schema_files() {
     );
 
     // When git init succeeded (git binary present), the tombi pre-commit
-    // hook must be installed (mirrors config_new_installs_executable_tombi_hook).
+    // hook must be installed (mirrors fleet_new_installs_executable_tombi_hook).
     if dest.join(".git").exists() {
         let hook = dest.join(".git").join("hooks").join("pre-commit");
         assert!(
@@ -697,19 +697,19 @@ fn config_new_empty_emits_tombi_and_schema_files() {
 /// Spec 15 §7: a scaffolded repo must FAIL `tombi lint` when an unknown key
 /// is planted in workestrate.toml (schema strict + additionalProperties:
 /// false). HOST-NIX gate: skipped when `tombi` is not on PATH (mirrors the
-/// tombi-absent pattern in config_new_hook_behavioral).
+/// tombi-absent pattern in fleet_new_hook_behavioral).
 #[test]
-fn config_new_scaffolded_repo_tombi_lint_rejects_unknown_key() {
+fn fleet_new_scaffolded_repo_tombi_lint_rejects_unknown_key() {
     if find_tombi().is_none() {
         eprintln!(
-            "cmd_config_new: SKIP tombi negative-schema test — 'tombi' not on PATH \
-             (HOST-NIX gate; mirrors config_new_hook_behavioral)."
+            "cmd_fleet_new: SKIP tombi negative-schema test — 'tombi' not on PATH \
+             (HOST-NIX gate; mirrors fleet_new_hook_behavioral)."
         );
         return;
     }
 
-    let home = IsolatedHome::new("cmd-config-new");
-    let dest = scaffold_repo(&home, "negschema");
+    let home = IsolatedHome::new("cmd-fleet-new");
+    let dest = scaffold_fleet(&home, "negschema");
 
     // Plant an unknown top-level key ahead of all tables so it lands at
     // the document root, where the schema sets additionalProperties: false.

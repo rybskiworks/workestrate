@@ -7,7 +7,7 @@
 //! fixture and asserts the stdout is BYTE-identical to the committed golden
 //! file (loaded via `include_str!`).
 //!
-//! Hermetic: the child gets `WORKESTRATE_CONFIG_DIR` pointed at
+//! Hermetic: the child gets `WORKESTRATE_FLEET_DIR` pointed at
 //! `config.reference`; all layering/registry env vars are removed so the
 //! host's own workestrate state can never leak into the render.
 
@@ -38,9 +38,9 @@ fn config_reference_dir() -> PathBuf {
 fn render_plan(name: &str) -> Vec<u8> {
     let out = Command::new(BIN)
         .args(["workload", "plan", name])
-        .env("WORKESTRATE_CONFIG_DIR", config_reference_dir())
+        .env("WORKESTRATE_FLEET_DIR", config_reference_dir())
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
-        .env_remove("WORKESTRATE_HOME")
+        .env_remove("WORKESTRATE_CONFIG")
         .env_remove("WORKESTRATE_CONTEXT")
         .output()
         .unwrap_or_else(|e| panic!("failed to invoke `workestrate workload plan {name}`: {e}"));
@@ -127,10 +127,10 @@ fn golden_parallel_instance_plan_matches_byte_for_byte() {
 
     let out = Command::new(BIN)
         .args(["workload", "plan", "example-service", "--instance", "canary"])
-        .env("WORKESTRATE_CONFIG_DIR", config_reference_dir())
+        .env("WORKESTRATE_FLEET_DIR", config_reference_dir())
         .env("WORKESTRATE_STATE_DIR", &state_dir)
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
-        .env_remove("WORKESTRATE_HOME")
+        .env_remove("WORKESTRATE_CONFIG")
         .env_remove("WORKESTRATE_CONTEXT")
         .output()
         .unwrap_or_else(|e| {
@@ -148,7 +148,7 @@ fn golden_parallel_instance_plan_matches_byte_for_byte() {
         "golden drift for `workload plan example-service --instance canary`: output no longer \
          matches control/agentctl/tests/golden/example-service.plan-instance.txt \
          byte-for-byte.\n{}\nIf the Display change is intended, regenerate the fixture \
-         (WORKESTRATE_CONFIG_DIR=config.reference WORKESTRATE_STATE_DIR=$(mktemp -d) \
+         (WORKESTRATE_FLEET_DIR=config.reference WORKESTRATE_STATE_DIR=$(mktemp -d) \
          cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan \
          example-service --instance canary).",
         first_diff_context(&out.stdout, golden.as_bytes()),

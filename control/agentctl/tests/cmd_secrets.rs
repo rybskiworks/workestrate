@@ -1,6 +1,6 @@
 //! Integration tests for `workestrate secrets init|update` — the Rust port of
 //! `scripts/test-setup-secrets.py`. Real sops/age crypto against disposable
-//! operator homes and freshly generated keys; the secret value is asserted to
+//! operator configs and freshly generated keys; the secret value is asserted to
 //! NEVER appear in stdout/stderr. Crypto-dependent tests skip (with a note)
 //! when `sops`/`age-keygen` are not on PATH so tool-less environments stay
 //! green.
@@ -45,14 +45,14 @@ fn skip_without_crypto(test: &str) -> bool {
     true
 }
 
-/// Disposable fixture mirroring the python suite's setUp: an "operator home"
+/// Disposable fixture mirroring the python suite's setUp: an "operator config"
 /// holding the registry + fleet clone, a separate "user home", unrelated XDG
 /// dirs, and a fresh age key.
 struct Fixture {
     #[allow(dead_code)]
     root_guard: TempDir,
     root: PathBuf,
-    home: PathBuf,
+    config: PathBuf,
     fleet: PathBuf,
     key: PathBuf,
 }
@@ -64,8 +64,8 @@ impl Fixture {
         }
         let root_guard = TempDir::new("cmd-secrets");
         let root = root_guard.path().to_path_buf();
-        let home = root.join("operator home");
-        let fleet = home.join("config-repos/personal");
+        let config = root.join("operator config");
+        let fleet = config.join("fleets/personal");
         let key = root.join("private keys/age.txt");
         std::fs::create_dir_all(key.parent().unwrap()).expect("create key dir");
         let status = Command::new("age-keygen")
@@ -77,7 +77,7 @@ impl Fixture {
         let fx = Self {
             root_guard,
             root,
-            home,
+            config,
             fleet,
             key,
         };
@@ -116,10 +116,10 @@ impl Fixture {
     }
 
     fn write_registry(&self, settings: &str, overrides: &str) {
-        std::fs::create_dir_all(&self.home).expect("create operator home");
+        std::fs::create_dir_all(&self.config).expect("create operator config");
         std::fs::write(
-            self.home.join("config.toml"),
-            format!("layers = [\"personal\"]\n{settings}\n[configs.personal]\nurl = \"config-repos/personal\"\n{overrides}\n"),
+            self.config.join("config.toml"),
+            format!("layers = [\"personal\"]\n{settings}\n[fleets.personal]\nurl = \"fleets/personal\"\n{overrides}\n"),
         )
         .expect("write registry");
     }
@@ -140,8 +140,8 @@ impl Fixture {
         c.env("LC_ALL", "C");
         // Fail deterministically if a flow unexpectedly goes interactive.
         c.env("EDITOR", "false");
-        c.env_remove("WORKESTRATE_HOME");
-        c.env_remove("WORKESTRATE_CONFIG_DIR");
+        c.env_remove("WORKESTRATE_CONFIG");
+        c.env_remove("WORKESTRATE_FLEET_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
         c.env_remove("WORKESTRATE_REFERENCE_CONFIG");
         c.env_remove("WORKESTRATE_INVOKE_CWD");
@@ -224,16 +224,16 @@ fn named_config_initializes_and_updates_only_selected_fleet() {
         return;
     }
     let fx = Fixture::new().unwrap();
-    let other = fx.home.join("config-repos/other");
+    let other = fx.config.join("fleets/other");
     fx.make_fleet(&other, &fx.recipient());
     std::fs::write(other.join(".env.enc"), "untouched ciphertext fixture").unwrap();
 
     let init_args = [
         "secrets",
         "init",
-        "--home",
-        fx.home.to_str().unwrap(),
         "--config",
+        fx.config.to_str().unwrap(),
+        "--fleet",
         "personal",
     ];
     fx.run_ok(&init_args, &[]);
@@ -246,9 +246,9 @@ fn named_config_initializes_and_updates_only_selected_fleet() {
     let update_args = [
         "secrets",
         "update",
-        "--home",
-        fx.home.to_str().unwrap(),
         "--config",
+        fx.config.to_str().unwrap(),
+        "--fleet",
         "personal",
     ];
     let out = fx.run_ok(&update_args, &[("LITELLM_MASTER_KEY", UPDATED_VALUE)]);
@@ -277,9 +277,9 @@ fn named_config_initializes_and_updates_only_selected_fleet() {
     assert!(!fx.root.join("unrelated xdg data").exists());
 }
 
-/// 2. Relative --home and equals-form options after the subcommand.
+/// 2. Relative --config and equals-form options after the subcommand.
 #[test]
-fn relative_home_and_equals_options_after_command() {
+fn relative_config_and_equals_options_after_command() {
     if skip_without_crypto("relative_home_and_equals_options_after_command") {
         return;
     }
@@ -288,17 +288,17 @@ fn relative_home_and_equals_options_after_command() {
         &[
             "secrets",
             "init",
-            "--home=operator home",
-            "--config=personal",
+            "--config=operator config",
+            "--fleet=personal",
         ],
         &[],
     );
     assert!(fx.fleet.join(".env.enc").is_file());
 }
 
-/// 3. WORKESTRATE_HOME env + explicit --config beats WORKESTRATE_CONFIG_DIR.
+/// 3. WORKESTRATE_CONFIG env + explicit --config beats WORKESTRATE_FLEET_DIR.
 #[test]
-fn home_environment_and_explicit_name_override_direct_environment() {
+fn config_environment_and_explicit_name_override_direct_environment() {
     if skip_without_crypto("home_environment_and_explicit_name_override_direct_environment") {
         return;
     }
@@ -306,34 +306,34 @@ fn home_environment_and_explicit_name_override_direct_environment() {
     let other = fx.root.join("unselected fleet");
     fx.make_fleet(&other, &fx.recipient());
     fx.run_ok(
-        &["secrets", "init", "--config", "personal"],
+        &["secrets", "init", "--fleet", "personal"],
         &[
-            ("WORKESTRATE_HOME", fx.home.to_str().unwrap()),
-            ("WORKESTRATE_CONFIG_DIR", other.to_str().unwrap()),
+            ("WORKESTRATE_CONFIG", fx.config.to_str().unwrap()),
+            ("WORKESTRATE_FLEET_DIR", other.to_str().unwrap()),
         ],
     );
     assert!(fx.fleet.join(".env.enc").is_file());
     assert!(!other.join(".env.enc").exists());
 }
 
-/// 4. The --home flag beats the WORKESTRATE_HOME env var.
+/// 4. The --config flag beats the WORKESTRATE_CONFIG env var.
 #[test]
-fn home_flag_overrides_home_environment() {
+fn config_flag_overrides_config_environment() {
     if skip_without_crypto("home_flag_overrides_home_environment") {
         return;
     }
     let fx = Fixture::new().unwrap();
-    let wrong = fx.root.join("wrong home");
+    let wrong = fx.root.join("wrong config");
     fx.run_ok(
         &[
             "secrets",
             "init",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "personal",
         ],
-        &[("WORKESTRATE_HOME", wrong.to_str().unwrap())],
+        &[("WORKESTRATE_CONFIG", wrong.to_str().unwrap())],
     );
     assert!(fx.fleet.join(".env.enc").is_file());
     assert!(!wrong.exists());
@@ -349,7 +349,7 @@ fn registered_store_file_and_key_overrides() {
     }
     let fx = Fixture::new().unwrap();
     let store = fx.root.join("custom \"store\"");
-    let selected = store.join("config-repos/personal");
+    let selected = store.join("fleets/personal");
     fx.make_fleet(&selected, &fx.recipient());
     let settings = format!(
         "[settings]\nstore_dir = \"{}\"\n",
@@ -365,9 +365,9 @@ fn registered_store_file_and_key_overrides() {
         &[
             "secrets",
             "init",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "personal",
         ],
         &[
@@ -384,7 +384,7 @@ fn registered_store_file_and_key_overrides() {
     assert!(!fx.fleet.join(".env.enc").exists());
 }
 
-/// 6. --config-dir with spaces, quotes, and shell metacharacters in the
+/// 6. --fleet-dir with spaces, quotes, and shell metacharacters in the
 ///    name: pure path handling, no injection, file lands in the right place.
 #[test]
 fn direct_directory_handles_relative_paths_and_shell_metacharacters() {
@@ -396,8 +396,8 @@ fn direct_directory_handles_relative_paths_and_shell_metacharacters() {
     let selected = fx.root.join(name);
     fx.make_fleet(&selected, &fx.recipient());
     fx.run_ok(
-        &["secrets", "init", "--config-dir", name],
-        &[("WORKESTRATE_CONFIG_DIR", fx.fleet.to_str().unwrap())],
+        &["secrets", "init", "--fleet-dir", name],
+        &[("WORKESTRATE_FLEET_DIR", fx.fleet.to_str().unwrap())],
     );
     assert!(
         fx.decrypt(&selected.join(".env.enc"))
@@ -422,9 +422,9 @@ fn relative_registry_key_is_resolved_against_invocation_cwd() {
         &[
             "secrets",
             "init",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "personal",
         ],
         &[],
@@ -435,19 +435,19 @@ fn relative_registry_key_is_resolved_against_invocation_cwd() {
     );
 }
 
-/// 8. --config-dir=<path> equals form.
+/// 8. --fleet-dir=<path> equals form.
 #[test]
 fn direct_directory_equals_form() {
     if skip_without_crypto("direct_directory_equals_form") {
         return;
     }
     let fx = Fixture::new().unwrap();
-    let arg = format!("--config-dir={}", fx.fleet.display());
+    let arg = format!("--fleet-dir={}", fx.fleet.display());
     fx.run_ok(&["secrets", "init", &arg], &[]);
     assert!(fx.fleet.join(".env.enc").exists());
 }
 
-/// 9. An unknown config name is a hard error (no environment fallback) and
+/// 9. An unknown fleet name is a hard error (no environment fallback) and
 ///    nothing is written.
 #[test]
 fn unknown_name_does_not_fall_back_to_environment() {
@@ -459,23 +459,23 @@ fn unknown_name_does_not_fall_back_to_environment() {
         &[
             "secrets",
             "init",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "missing",
         ],
-        &[("WORKESTRATE_CONFIG_DIR", fx.fleet.to_str().unwrap())],
+        &[("WORKESTRATE_FLEET_DIR", fx.fleet.to_str().unwrap())],
         false,
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("could not resolve config 'missing'"),
-        "expected could-not-resolve error, got: {stderr}"
+        stderr.contains("could not resolve fleet 'missing'"),
+        "expected could-not-resolve-fleet error, got: {stderr}"
     );
     assert!(!fx.fleet.join(".env.enc").exists());
 }
 
-/// 10. A missing --config-dir directory on update errors and is NOT created.
+/// 10. A missing --fleet-dir directory on update errors and is NOT created.
 #[test]
 fn missing_directory_is_not_created() {
     if skip_without_crypto("missing_directory_is_not_created") {
@@ -487,7 +487,7 @@ fn missing_directory_is_not_created() {
         &[
             "secrets",
             "update",
-            "--config-dir",
+            "--fleet-dir",
             missing.to_str().unwrap(),
         ],
         &[],
@@ -495,7 +495,7 @@ fn missing_directory_is_not_created() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("target config directory does not exist"),
+        stderr.contains("target fleet directory does not exist"),
         "expected missing-directory error, got: {stderr}"
     );
     assert!(!missing.exists());
@@ -507,26 +507,26 @@ fn missing_directory_is_not_created() {
 fn invalid_arguments_fail_before_writes() {
     let root_guard = TempDir::new("cmd-secrets-invalid");
     let root = root_guard.path();
-    let home = root.join("operator home");
-    let fleet = home.join("config-repos/personal");
+    let config_dir = root.join("operator config");
+    let fleet = config_dir.join("fleets/personal");
     std::fs::create_dir_all(&fleet).unwrap();
 
     let cases: Vec<Vec<String>> = vec![
         vec!["--config".into()],
         vec!["--config=".into()],
-        vec!["--config-dir".into()],
-        vec!["--config-dir=".into()],
-        vec!["--config".into(), "--global".into()],
-        vec!["--config".into(), "personal".into(), "--global".into()],
+        vec!["--fleet-dir".into()],
+        vec!["--fleet-dir=".into()],
+        vec!["--fleet".into(), "--global".into()],
+        vec!["--fleet".into(), "personal".into(), "--global".into()],
         vec![
-            "--config-dir".into(),
+            "--fleet-dir".into(),
             fleet.display().to_string(),
             "--global".into(),
         ],
         vec![
-            "--config-dir".into(),
+            "--fleet-dir".into(),
             fleet.display().to_string(),
-            "--config".into(),
+            "--fleet".into(),
             "personal".into(),
         ],
         vec!["--unknown".into()],
@@ -543,8 +543,8 @@ fn invalid_arguments_fail_before_writes() {
                 .env("HOME", root.join("user home"))
                 .env("XDG_CONFIG_HOME", root.join("unrelated xdg config"))
                 .env("LC_ALL", "C")
-                .env_remove("WORKESTRATE_HOME")
-                .env_remove("WORKESTRATE_CONFIG_DIR")
+                .env_remove("WORKESTRATE_CONFIG")
+                .env_remove("WORKESTRATE_FLEET_DIR")
                 .stdin(std::process::Stdio::null())
                 .output()
                 .expect("invoke workestrate secrets");
@@ -609,9 +609,9 @@ fn secret_file_permissions_and_no_temp_leftovers() {
         &[
             "secrets",
             "init",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "personal",
         ],
         &[],
@@ -620,9 +620,9 @@ fn secret_file_permissions_and_no_temp_leftovers() {
         &[
             "secrets",
             "update",
-            "--home",
-            fx.home.to_str().unwrap(),
             "--config",
+            fx.config.to_str().unwrap(),
+            "--fleet",
             "personal",
         ],
         &[("LITELLM_MASTER_KEY", UPDATED_VALUE)],

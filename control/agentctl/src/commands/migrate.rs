@@ -1,4 +1,4 @@
-//! `workestrate migrate-home` (ADR 0023) plus its summary renderer and
+//! `workestrate migrate-config` (ADR 0023) plus its summary renderer and
 //! sizing helpers.
 
 use std::path::Path;
@@ -39,7 +39,7 @@ pub fn entry_bytes(path: &Path) -> u64 {
 }
 
 /// One-time stderr note for a directory that could not be read mid-recursion
-/// (FS-25). migrate-home sizing is informational; the note keeps a
+/// (FS-25). migrate-config sizing is informational; the note keeps a
 /// permission-denied subdir from silently shrinking the reported total.
 static ENTRY_BYTES_WARN: std::sync::Once = std::sync::Once::new();
 
@@ -54,7 +54,7 @@ fn emit_entry_bytes_warn(path: &Path, e: &std::io::Error) {
 }
 
 pub fn render_migrate_summary_human(summary: &config::MigrateSummary) {
-    println!("migrate-home");
+    println!("migrate-config");
     println!("  source layout: {}", summary.from);
     println!("  destination:   {}", summary.dest);
     println!(
@@ -86,9 +86,9 @@ pub fn render_migrate_summary_human(summary: &config::MigrateSummary) {
     }
     if !summary.dry_run {
         println!(
-            "  registry updated: {} (home_version: {})",
+            "  registry updated: {} (config_version: {})",
             summary.registry_updated,
-            match summary.home_version {
+            match summary.config_version {
                 Some(v) => v.to_string(),
                 None => "absent".to_string(),
             }
@@ -102,28 +102,33 @@ pub fn render_migrate_summary_human(summary: &config::MigrateSummary) {
     }
 }
 
-/// `workestrate migrate-home`: consolidate a legacy layout into a single
-/// `WORKESTRATE_HOME` (ADR 0023). See `config::run_migrate_home` for the
+/// `workestrate migrate-config`: consolidate a legacy layout into a single
+/// `WORKESTRATE_CONFIG` (ADR 0023). See `config::run_migrate_config` for the
 /// mechanics; this fn only resolves the destination and renders the summary.
-pub fn cmd_migrate_home(from: Option<&str>, dry_run: bool, json: bool, force: bool) -> Result<()> {
-    let wh = std::env::var("WORKESTRATE_HOME")
+pub fn cmd_migrate_config(
+    from: Option<&str>,
+    dry_run: bool,
+    json: bool,
+    force: bool,
+) -> Result<()> {
+    let wh = std::env::var("WORKESTRATE_CONFIG")
         .ok()
         .filter(|v| !v.is_empty());
-    let dest = if let Some(home) = wh {
-        config::expand_tilde(&home)
+    let dest = if let Some(config_dir) = wh {
+        config::expand_tilde(&config_dir)
     } else if from == Some("bundle") {
         let cwd = config::invoke_cwd_or_err()?;
         let candidate = cwd.join(".workestrate");
         if candidate.is_dir() {
             candidate
         } else {
-            config::resolve_home()
+            config::resolve_config_dir()
         }
     } else {
-        config::resolve_home()
+        config::resolve_config_dir()
     };
 
-    let summary = config::run_migrate_home(from, &dest, dry_run, force)?;
+    let summary = config::run_migrate_config(from, &dest, dry_run, force)?;
 
     if json {
         let body = serde_json::to_string(&summary)

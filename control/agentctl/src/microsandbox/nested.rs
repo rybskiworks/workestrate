@@ -7,7 +7,7 @@
 //! KVM" means. It also owns the pure policy-ladder resolution
 //! ([`resolve_virtualization`] / [`resolve_for_workload`]) that maps the
 //! workload's `[workloads.<name>.virtualization]` ASK against the collected
-//! home `[policy.virtualization]` seal fragments.
+//! config `[policy.virtualization]` seal fragments.
 //!
 //! Layering (ADR 0036 §§3-4):
 //! - `validate-config`: static only (closed vocab at parse; cross-rung
@@ -194,7 +194,7 @@ pub fn host_offers_nested(probe: &NestedProbe) -> bool {
 
 /// Pure resolution of ONE workload's nested-virt posture (ADR 0036 §§3/5,
 /// D8): the workload's `[workloads.<name>.virtualization]` ASK against the
-/// collected home `[policy.virtualization]` seal rungs.
+/// collected config `[policy.virtualization]` seal rungs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualizationResolution {
     /// Effective ask (`None` at the call site = omitted → Off).
@@ -205,7 +205,7 @@ pub struct VirtualizationResolution {
     /// `effective ≠ off` but the seal denies it (plan reports, up refuses).
     pub frozen_out: bool,
     /// Origin label of the rung that denied/sealed (the ladder's declaring
-    /// layer name or `home-registry`), when frozen out.
+    /// layer name or `config-registry`), when frozen out.
     pub frozen_by: Option<String>,
     /// Where the ASK came from (merge-provenance layer label) — named in
     /// the `plan` warn line.
@@ -215,7 +215,7 @@ pub struct VirtualizationResolution {
     pub sealed: bool,
 }
 
-/// Walk the seal `rungs` authority-ASCENDING (home registry first, then
+/// Walk the seal `rungs` authority-ASCENDING (config registry first, then
 /// config layers in stack order, then the workload capsule's rungs — the
 /// secrets-ladder walk shape) and resolve the `ask` against them.
 ///
@@ -273,7 +273,7 @@ pub fn resolve_for_workload(
 ) -> VirtualizationResolution {
     let ladder = crate::merge::get_virtualization_ladder().unwrap_or_default();
     let mut rungs: Vec<(String, VirtualizationPolicyFragment)> = Vec::new();
-    if let Some((origin, fragment)) = &ladder.home {
+    if let Some((origin, fragment)) = &ladder.config {
         rungs.push((origin.clone(), fragment.clone()));
     }
     for (origin, fragment) in &ladder.layers {
@@ -299,7 +299,7 @@ pub fn resolve_for_workload(
 /// - `off` → always Ok (current behavior, no checks).
 /// - `prefer` → NEVER refuses (degrades; the degraded state lands in the
 ///   plan provenance per D7).
-/// - `require` → refuses when the home-final seal froze it out, when
+/// - `require` → refuses when the config-final seal froze it out, when
 ///   `/dev/kvm` is missing or not accessible, when the arch is unsupported,
 ///   or when the CPU nested parameter is affirmatively disabled. An UNKNOWN
 ///   nested parameter (`None`) is a `plan` note / doctor WARN, never a
@@ -320,9 +320,9 @@ pub fn nested_up_decision(
     if let Some(sealed_by) = frozen_by {
         anyhow::bail!(
             "error: workload '{workload}' requests nested virtualization (virtualization.nested=\"{nested}\") \
-             but the home [policy.virtualization] seal forbids it (frozen by '{sealed_by}': allow_nested=false, final=true) — \
+             but the config [policy.virtualization] seal forbids it (frozen by '{sealed_by}': allow_nested=false, final=true) — \
              see ADR 0036 §4 (final seals, never enables)\n\
-             hint: ask the home operator to relax the seal, or set nested=\"off\" to opt out"
+             hint: ask the config operator to relax the seal, or set nested=\"off\" to opt out"
         );
     }
     if nested == NestedMode::Prefer {
@@ -477,13 +477,14 @@ mod tests {
             "non-Linux/x86_64 + require fails closed: {err}"
         );
         // Frozen seal refuses for BOTH require and prefer (prefer never
-        // refuses for HOST reasons, but a home-final ban still seals it).
+        // refuses for HOST reasons, but a config-final ban still seals it).
         for mode in [NestedMode::Require, NestedMode::Prefer] {
-            let err = nested_up_decision("job", mode, &NestedProbe::full(), Some("home-registry"))
-                .unwrap_err()
-                .to_string();
+            let err =
+                nested_up_decision("job", mode, &NestedProbe::full(), Some("config-registry"))
+                    .unwrap_err()
+                    .to_string();
             assert!(
-                err.contains("seal forbids it") && err.contains("home-registry"),
+                err.contains("seal forbids it") && err.contains("config-registry"),
                 "frozen {mode} must refuse citing the seal: {err}"
             );
         }
@@ -493,7 +494,7 @@ mod tests {
                 "job",
                 NestedMode::Off,
                 &NestedProbe::full(),
-                Some("home-registry")
+                Some("config-registry")
             )
             .is_ok()
         );
@@ -512,14 +513,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_home_ban_freezes_require() {
-        let home = fragment(Some(false), true);
-        let rungs = [("home-registry", &home)];
+    fn resolve_config_ban_freezes_require() {
+        let config = fragment(Some(false), true);
+        let rungs = [("config-registry", &config)];
         let res = resolve_virtualization(Some(NestedMode::Require), "personal", &rungs);
         assert_eq!(res.effective, NestedMode::Require);
         assert!(!res.allowed);
         assert!(res.frozen_out);
-        assert_eq!(res.frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(res.frozen_by.as_deref(), Some("config-registry"));
         assert!(res.sealed);
         assert_eq!(res.origin, "personal");
     }
@@ -528,8 +529,8 @@ mod tests {
     fn resolve_grant_enables_nothing_by_itself() {
         // `allow_nested=true` grants nothing: off stays off (the workload
         // still needs an explicit nested≠off).
-        let home = fragment(Some(true), false);
-        let rungs = [("home-registry", &home)];
+        let config = fragment(Some(true), false);
+        let rungs = [("config-registry", &config)];
         let res = resolve_virtualization(None, "declared", &rungs);
         assert_eq!(res.effective, NestedMode::Off);
         assert!(res.allowed);
@@ -540,9 +541,9 @@ mod tests {
     fn resolve_bare_final_freezes_so_far_without_denying() {
         // A bare final (no allow_nested) freezes the built-in allow: lower
         // rungs cannot enable OR deny past it, and nothing is frozen out.
-        let home = fragment(None, true);
+        let config = fragment(None, true);
         let layer = fragment(Some(false), false);
-        let rungs = [("home-registry", &home), ("personal", &layer)];
+        let rungs = [("config-registry", &config), ("personal", &layer)];
         let res = resolve_virtualization(Some(NestedMode::Prefer), "personal", &rungs);
         assert!(res.allowed);
         assert!(!res.frozen_out);
@@ -552,19 +553,19 @@ mod tests {
     #[test]
     fn resolve_later_allow_wins_until_sealed() {
         // Non-final deny then layer allow: the later (more specific) rung wins.
-        let home = fragment(Some(false), false);
+        let config = fragment(Some(false), false);
         let layer = fragment(Some(true), false);
-        let rungs = [("home-registry", &home), ("personal", &layer)];
+        let rungs = [("config-registry", &config), ("personal", &layer)];
         let res = resolve_virtualization(Some(NestedMode::Require), "personal", &rungs);
         assert!(res.allowed);
         assert!(!res.frozen_out);
-        // Reversed: seal at home stops the layer allow from rescuing.
-        let home = fragment(Some(false), true);
+        // Reversed: seal at config stops the layer allow from rescuing.
+        let config = fragment(Some(false), true);
         let layer = fragment(Some(true), false);
-        let rungs = [("home-registry", &home), ("personal", &layer)];
+        let rungs = [("config-registry", &config), ("personal", &layer)];
         let res = resolve_virtualization(Some(NestedMode::Require), "personal", &rungs);
         assert!(!res.allowed);
-        assert_eq!(res.frozen_by.as_deref(), Some("home-registry"));
+        assert_eq!(res.frozen_by.as_deref(), Some("config-registry"));
     }
 
     // ---- probe helpers ----
