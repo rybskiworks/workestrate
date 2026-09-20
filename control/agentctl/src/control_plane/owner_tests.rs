@@ -56,7 +56,15 @@ struct Call {
 impl Drop for Call {
     fn drop(&mut self) {
         if !self.finished {
-            self.fixture.state.lock().unwrap().abandoned.push(self.key);
+            // Poison-tolerant: a failing assertion while the state lock is
+            // held must not turn fixture teardown into a double panic (which
+            // aborts the whole test process).
+            self.fixture
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .abandoned
+                .push(self.key);
         }
     }
 }
@@ -201,7 +209,13 @@ impl NativeExec for Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.0.state.lock().unwrap().dropped_sessions.push(self.1);
+        // Poison-tolerant: see `Call::drop`.
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dropped_sessions
+            .push(self.1);
     }
 }
 
@@ -325,6 +339,17 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
     std::future::poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
 }
 
+/// Yield the current task AND give the runtime a chance to park: a bare
+/// `yield_now` requeues the test task immediately, so a tight poll loop can
+/// spin for its whole budget without the I/O driver ever dispatching pending
+/// socket events (decoder EOF, listener readiness) or polling woken sibling
+/// tasks. A 1ms sleep forces a park; under paused time the runtime processes
+/// pending readiness before advancing the clock, so the virtual cost stays
+/// negligible next to the multi-second wire deadlines.
+async fn yield_to_reactor() {
+    tokio::time::sleep(Duration::from_millis(1)).await;
+}
+
 async fn drive_until<F: Future>(mut future: Pin<&mut F>, ready: impl Fn() -> bool) {
     for _ in 0..128 {
         assert!(
@@ -334,7 +359,7 @@ async fn drive_until<F: Future>(mut future: Pin<&mut F>, ready: impl Fn() -> boo
         if ready() {
             return;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     panic!("fixture phase did not become ready");
 }
@@ -477,7 +502,7 @@ async fn owner_disconnected_queued_request_has_no_native_effects() {
             answered = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert!(answered, "live queued control request did not complete");
     assert!(!fixture.native.has_entered("verify"));
@@ -554,7 +579,7 @@ async fn owner_sixteen_partial_clients_bound_admission_and_reap_releases_one_slo
             poll_once(reply.as_mut()).await.is_pending(),
             "seventeenth client admitted"
         );
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     drop(clients.remove(0)); // Exactly one accepted client closes, not all sixteen.
     let mut answered = false;
@@ -568,7 +593,7 @@ async fn owner_sixteen_partial_clients_bound_admission_and_reap_releases_one_slo
             answered = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert!(answered, "reaped client did not release one admission slot");
     drop(reply);
@@ -731,7 +756,7 @@ async fn owner_without_broker_keeps_reconciled_desired_state_unobserved_and_unre
             accepted = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert!(accepted);
     drop(serving);
@@ -904,7 +929,7 @@ async fn owner_actual_half_closed_request_still_dispatches_and_receives_its_repl
             answered = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert!(answered);
     drop(response);
@@ -954,7 +979,7 @@ async fn owner_actual_fully_closed_queued_client_is_refused_before_native_dispat
         if sender.capacity() == QUEUE_CAPACITY - 2 {
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert_eq!(sender.capacity(), QUEUE_CAPACITY - 2);
     fixture.native.state.lock().unwrap().blocked.remove("start");
@@ -970,7 +995,7 @@ async fn owner_actual_fully_closed_queued_client_is_refused_before_native_dispat
             answered = true;
             break;
         }
-        tokio::task::yield_now().await;
+        yield_to_reactor().await;
     }
     assert!(
         answered,

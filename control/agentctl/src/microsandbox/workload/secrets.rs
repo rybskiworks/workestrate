@@ -91,6 +91,20 @@ pub(crate) fn apply_secret_policy_ladder(
     provenance: &mut Provenance,
 ) {
     let ladder = crate::merge::get_secret_policy_ladder().unwrap_or_default();
+    apply_ladder(secrets, config, workload_name, provenance, &ladder);
+}
+
+/// The pure core of [`apply_secret_policy_ladder`]: resolves `secrets`
+/// against an EXPLICIT ladder. Kept separate from the process-global read so
+/// tests can drive it without touching shared state (a concurrent
+/// `load_config` rewrites the global without any test lock).
+pub(crate) fn apply_ladder(
+    secrets: &mut HashMap<String, SecretDefinition>,
+    config: &ConfigFile,
+    workload_name: &str,
+    provenance: &mut Provenance,
+    ladder: &crate::merge::SecretPolicyLadder,
+) {
     let mut rungs: Vec<(String, SecretsPolicyFragment)> = Vec::new();
     if let Some((origin, fragment)) = &ladder.home {
         rungs.push((origin.clone(), fragment.clone()));
@@ -804,17 +818,12 @@ final = true
     /// the deciding rung is recorded in the merge provenance under
     /// `secrets.<NAME>.on_violation.resolved`.
     ///
-    /// Isolation: the ladder store is process-global, so this test holds
-    /// [`crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK`] (the
-    /// same serialization the direct provenance-store mutators use) AND
-    /// sets exactly the ladder it needs at the start — no dependence on
-    /// test execution order.
+    /// Isolation: drives [`apply_ladder`] with an EXPLICIT ladder — the
+    /// process-global ladder store is never touched (a concurrent
+    /// `load_config` rewrites it without any test lock).
     #[test]
     fn apply_secret_policy_ladder_resolves_and_records_provenance() -> Result<()> {
-        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
-            .lock()
-            .unwrap();
-        crate::merge::set_secret_policy_ladder(Some(crate::merge::SecretPolicyLadder {
+        let ladder = crate::merge::SecretPolicyLadder {
             home: Some((
                 "home-registry".to_string(),
                 SecretsPolicyFragment {
@@ -823,7 +832,7 @@ final = true
                 },
             )),
             ..Default::default()
-        }));
+        };
 
         let layer = crate::merge::Layer::from_string(
             "base",
@@ -840,7 +849,7 @@ final = true
             "personal#secrets.toml".to_string(),
         );
 
-        apply_secret_policy_ladder(&mut secrets, &config, "pi", &mut provenance);
+        apply_ladder(&mut secrets, &config, "pi", &mut provenance, &ladder);
 
         assert_eq!(
             secrets["GITHUB_TOKEN"].on_violation,
@@ -855,24 +864,19 @@ final = true
             "the deciding rung is recorded in the provenance"
         );
 
-        crate::merge::set_secret_policy_ladder(None);
         Ok(())
     }
 
-    /// No stored ladder → the pre-ladder behavior: the per-secret entry
+    /// No ladder rungs → the pre-ladder behavior: the per-secret entry
     /// (with its merge-provenance layer origin) stands, and a secret with
     /// no per-secret entry resolves to the built-in passthrough.
     ///
-    /// Isolation: same process-global discipline as
-    /// `apply_secret_policy_ladder_resolves_and_records_provenance` — the
-    /// storage lock plus an explicit `None` ladder at the start.
+    /// Isolation: same discipline as
+    /// `apply_secret_policy_ladder_resolves_and_records_provenance` — drives
+    /// [`apply_ladder`] with an explicit empty ladder; no process-global
+    /// state is touched.
     #[test]
     fn apply_secret_policy_ladder_without_ladder_keeps_merge_result() -> Result<()> {
-        let _guard = crate::config::test_support::PROVENANCE_STORAGE_TEST_LOCK
-            .lock()
-            .unwrap();
-        crate::merge::set_secret_policy_ladder(None);
-
         let layer = crate::merge::Layer::from_string(
             "base",
             &defs_toml(
@@ -883,7 +887,13 @@ final = true
         let (config, mut provenance) = crate::merge::merge_layers(&[layer])?;
         let mut secrets = build_secret_definitions(&config)?;
 
-        apply_secret_policy_ladder(&mut secrets, &config, "pi", &mut provenance);
+        apply_ladder(
+            &mut secrets,
+            &config,
+            "pi",
+            &mut provenance,
+            &crate::merge::SecretPolicyLadder::default(),
+        );
 
         assert_eq!(
             secrets["GITHUB_TOKEN"].on_violation,

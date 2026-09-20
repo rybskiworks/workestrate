@@ -425,6 +425,27 @@ mod tests {
             .unwrap();
     }
 
+    /// Re-bind after the previous endpoint was dropped.
+    ///
+    /// A `Command` spawned by an unrelated parallel test inherits this
+    /// process's file descriptors for the fork→exec window; if the fork
+    /// happens while the previous endpoint holds `owner.lock`, the child
+    /// briefly pins the flock past the endpoint's drop and an immediate
+    /// re-bind fails WouldBlock. The pin lapses as soon as the child execs,
+    /// so retry briefly instead of asserting on a single attempt.
+    fn bind_after_drop(directory: &Path, access: &LocalAccess) -> LocalEndpoint {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = None;
+        while std::time::Instant::now() < deadline {
+            match LocalEndpoint::bind(directory, access) {
+                Ok(endpoint) => return endpoint,
+                Err(error) => last = Some(error),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("control endpoint did not rebind after owner drop: {last:?}")
+    }
+
     #[tokio::test]
     async fn endpoint_owner_is_exclusive_and_normal_cleanup_preserves_lock() {
         let (_root, directory, access) = domain();
@@ -439,7 +460,7 @@ mod tests {
         drop(endpoint);
         assert!(!directory.join("control.sock").exists());
         assert!(directory.join("owner.lock").is_file());
-        drop(LocalEndpoint::bind(&directory, &access).unwrap());
+        drop(bind_after_drop(&directory, &access));
     }
 
     #[tokio::test]
@@ -521,7 +542,7 @@ mod tests {
         drop(endpoint);
         assert!(LocalEndpoint::bind(&directory, &access).is_err());
         std::fs::remove_file(alias).unwrap();
-        drop(LocalEndpoint::bind(&directory, &access).unwrap());
+        drop(bind_after_drop(&directory, &access));
     }
 
     #[tokio::test]

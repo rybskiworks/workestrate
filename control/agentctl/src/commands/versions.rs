@@ -24,7 +24,7 @@ pub const MSB_VERSION_PIN: &str = "0.6.18";
 /// Hand-maintained fork rev pin (full rev). Must agree with the
 /// `microsandbox-fork` input in `flake.nix` / `flake.lock` (enforced by
 /// `scripts/check-msb-versions.sh`).
-pub const FORK_REV_PIN: &str = "251b368a868d578ead123071c3e6bc8eec013817";
+pub const FORK_REV_PIN: &str = "fd78ad6eb1132c4132889f4e836fe5c92887c3e4";
 
 /// Expected libkrunfw soname shipped by the fork's runtime package.
 pub const LIBKRUNFW_SONAME: &str = "libkrunfw.so.5.6.1";

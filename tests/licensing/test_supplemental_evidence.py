@@ -174,5 +174,100 @@ class SupplementalEvidenceTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
 
+GIT_MANIFEST = '''[package]
+name = "synthetic-git"
+version = "0.1.0"
+license = "Apache-2.0"
+'''
+
+GIT_SOURCE = "git+https://example.invalid/repo?rev={0}#{0}".format("a" * 40)
+
+
+class GitSupplementalEvidenceTests(unittest.TestCase):
+    """Git checkouts are never rewritten: Cargo.toml itself is the original."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.crate = self.root / "crate"
+        self.crate.mkdir()
+        (self.crate / "Cargo.toml").write_text(GIT_MANIFEST)
+        self.helper = self.root / "helper"
+        self.helper.mkdir()
+        shutil.copytree(ROOT / "scripts/licensing/evidence", self.helper / "evidence")
+        file_patch = patch.object(m, "__file__", str(self.helper / "cargo_notices.py"))
+        file_patch.start()
+        self.addCleanup(file_patch.stop)
+        self.evidence = self.helper / "evidence/synthetic-git-0.1.0"
+        self.evidence.mkdir()
+        (self.evidence / "LICENSE").write_text("Synthetic upstream Apache text")
+        self.record = {
+            "schema": 1,
+            "package": {"name": "synthetic-git", "version": "0.1.0",
+                        "source": GIT_SOURCE, "checksum": None},
+            "manifest_sha256": m.digest(self.crate / "Cargo.toml"),
+            "documents": {"LICENSE": m.digest(self.evidence / "LICENSE")},
+        }
+        self.provenance = self.evidence / "NOTICE-provenance.json"
+        self.provenance.write_text(json.dumps(self.record))
+        self.package = dict(self.record["package"], id="git-synthetic-git-0.1.0",
+                            license="Apache-2.0", manifest_path=str(self.crate / "Cargo.toml"))
+        self.lock = self.root / "Cargo.lock"
+        # Git lock entries carry no checksum key at all; keep it absent even
+        # when a provenance record wrongly declares one.
+        self.lock.write_text('version = 4\n[[package]]\n' + ''.join(
+            f'{key} = {json.dumps(value)}\n' for key, value in self.record["package"].items()
+            if key != "checksum"))
+
+    def originals(self):
+        return m.originals(self.package, [], self.lock)
+
+    def test_git_manifest_is_the_original(self):
+        files = self.originals()
+        self.assertEqual({p.name for p in files}, {"LICENSE", "NOTICE-provenance.json"})
+
+    def test_git_manifest_mismatch_is_rejected(self):
+        (self.crate / "Cargo.toml").write_text(GIT_MANIFEST + "# changed\n")
+        with self.assertRaisesRegex(ValueError, "original manifest mismatch"):
+            self.originals()
+
+    def test_git_missing_manifest_is_rejected(self):
+        (self.crate / "Cargo.toml").unlink()
+        with self.assertRaisesRegex(ValueError, "regular Cargo.toml"):
+            self.originals()
+
+    def test_git_orig_file_is_not_a_substitute(self):
+        (self.crate / "Cargo.toml").rename(self.crate / "Cargo.toml.orig")
+        with self.assertRaisesRegex(ValueError, "regular Cargo.toml"):
+            self.originals()
+
+    def test_git_provenance_checksum_must_stay_absent(self):
+        self.record["package"]["checksum"] = "0" * 64
+        self.provenance.write_text(json.dumps(self.record))
+        with self.assertRaisesRegex(ValueError, "registry checksum mismatch"):
+            self.originals()
+
+    def test_git_unreviewed_version_still_fails(self):
+        self.package["version"] = "0.1.1"
+        with self.assertRaisesRegex(ValueError, "missing original legal evidence"):
+            self.originals()
+
+    def test_git_recorded_vendored_normalization_is_accepted(self):
+        normalized = GIT_MANIFEST.replace('license = "Apache-2.0"',
+                                          '[package.metadata.note]\nresolved = true\nlicense = "Apache-2.0"')
+        (self.crate / "Cargo.toml").write_text(normalized)
+        self.record["vendored_manifest_sha256"] = m.digest(self.crate / "Cargo.toml")
+        self.provenance.write_text(json.dumps(self.record))
+        files = self.originals()
+        self.assertEqual({p.name for p in files}, {"LICENSE", "NOTICE-provenance.json"})
+
+    def test_git_unrecorded_third_manifest_form_is_rejected(self):
+        self.record["vendored_manifest_sha256"] = m.digest(self.crate / "Cargo.toml")
+        self.provenance.write_text(json.dumps(self.record))
+        (self.crate / "Cargo.toml").write_text(GIT_MANIFEST + "# third form\n")
+        with self.assertRaisesRegex(ValueError, "original manifest mismatch"):
+            self.originals()
+
+
 if __name__ == "__main__":
     unittest.main()

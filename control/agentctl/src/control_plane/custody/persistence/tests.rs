@@ -20,6 +20,27 @@ fn fixture() -> (tempfile::TempDir, PathBuf, u32) {
     (root, path, uid)
 }
 
+/// Re-open the store after its previous owner was dropped.
+///
+/// A `Command` spawned by an unrelated parallel test inherits this
+/// process's file descriptors for the fork→exec window; if the fork happens
+/// while the previous owner holds `custody.lock`, the child briefly pins the
+/// flock past the owner's drop and an immediate re-open fails WouldBlock.
+/// The pin lapses as soon as the child execs, so retry briefly instead of
+/// asserting on a single attempt.
+fn open_after_drop(directory: &Path, uid: u32) -> SshController {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut last = None;
+    while std::time::Instant::now() < deadline {
+        match SshController::open(directory, uid) {
+            Ok(controller) => return controller,
+            Err(error) => last = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("custody store did not reopen after owner drop: {last:?}")
+}
+
 fn launch(generation: u8) -> LaunchRef {
     LaunchRef {
         instance: InstanceRef {
@@ -117,7 +138,7 @@ fn desired_revision_is_durable_before_a_transaction_can_be_returned() {
     assert!(saved.launches[0].desired.credentials.is_empty());
     let old_incarnation = controller.incarnation().clone();
     drop(controller);
-    let recovered = SshController::open(&directory, uid).unwrap();
+    let recovered = open_after_drop(&directory, uid);
     assert_ne!(old_incarnation, *recovered.incarnation());
     let status = recovered.status(&target).unwrap();
     assert_eq!(status.desired.revision, 2);
@@ -149,7 +170,7 @@ fn effective_policy_digest_and_material_rotation_are_committed_before_return() {
     assert_eq!(saved.launches[0].desired.revision, rotated.intent.revision);
     assert_eq!(rotated.intent.revision, 2);
     drop(controller);
-    let mut recovered = SshController::open(&directory, uid).unwrap();
+    let mut recovered = open_after_drop(&directory, uid);
     assert!(!recovered.status(&target).unwrap().ready);
     recovered
         .register_launch(target.clone(), &credentials(), None)
@@ -208,7 +229,7 @@ fn recovery_requires_current_policy_runtime_and_broker_reassertion() {
     let target = launch(1);
     let old = ready(&mut controller, &target);
     drop(controller);
-    let mut recovered = SshController::open(&directory, uid).unwrap();
+    let mut recovered = open_after_drop(&directory, uid);
     assert_eq!(
         recovered.observe(applied(&old)),
         Err(ControlError::StaleObservation)
@@ -280,7 +301,7 @@ fn lock_ownership_is_exclusive_and_recovers_only_after_owner_drop() {
     let lock = std::fs::metadata(directory.join("custody.lock")).unwrap();
     assert!(SshController::open(&directory, uid).is_err());
     drop(controller);
-    let next = SshController::open(&directory, uid).unwrap();
+    let next = open_after_drop(&directory, uid);
     assert!(same_file(
         &lock,
         &std::fs::metadata(directory.join("custody.lock")).unwrap()
@@ -352,7 +373,7 @@ fn retired_generations_survive_restart_and_cannot_be_registered_again() {
         .register_launch(launch(2), &credentials(), Some(&target))
         .unwrap();
     drop(controller);
-    let mut recovered = SshController::open(&directory, uid).unwrap();
+    let mut recovered = open_after_drop(&directory, uid);
     assert_eq!(
         recovered.register_launch(target, &credentials(), None),
         Err(ControlError::StaleLaunch)
@@ -397,7 +418,7 @@ fn invalid_snapshots_never_become_an_empty_authority() {
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
     std::fs::write(&path, original).unwrap();
-    assert!(SshController::open(&directory, uid).is_ok());
+    let _ = open_after_drop(&directory, uid);
 }
 
 #[test]
@@ -466,7 +487,7 @@ fn failed_desired_commit_returns_no_transaction_and_permanently_fences_owner() {
         Err(ControlError::StateUnavailable)
     );
     drop(controller);
-    let recovered = SshController::open(&directory, uid).unwrap();
+    let recovered = open_after_drop(&directory, uid);
     assert_eq!(recovered.launches.len(), 1);
     assert!(!recovered.status(&target).unwrap().ready);
 }

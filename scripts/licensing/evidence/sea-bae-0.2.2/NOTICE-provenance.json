@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sea-bae",
+    "version": "0.2.2",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "checksum": "260bbc7148a8d6818ac5032a1b9970da1a68bdd723d45b12d59f7c1bf3565e24"
+  },
+  "manifest_sha256": "7f748b7c48b37b31a27a154a3e235591d90fe5610594098814254b4698d352d3",
+  "upstream": {
+    "repository": "https://github.com/SeaQL/sea-bae",
+    "revision": "69863a9b02bbc2eed3d04fe20a5845a147e3a749",
+    "manifest": "Cargo.toml",
+    "manifest_git_blob": "857f99b2eec8432a38e57f653bbd0b44e9e76735",
+    "license_text": "absent",
+    "absence_review": "The repository tree at the 0.2.2 publish revision 69863a9b02bbc2eed3d04fe20a5845a147e3a749 (Cargo.toml declares version 0.2.2; crates.io archive published 2026-07-18) contains only .gitignore, CHANGELOG.md, Cargo.toml, README.md, rustfmt.toml and src/. No license, copying, notice or copyright text exists in the vendored .crate, in that tree, or anywhere in SeaQL/sea-bae or parent davidpdrsn/bae history. The published manifest declares license = \"MIT\" with authors = [\"David Pedersen <david.pdrsn@gmail.com>\"]."
+  },
+  "canonical_text": {
+    "spdx_id": "MIT",
+    "source": "https://github.com/spdx/license-list-data/blob/main/text/MIT.txt",
+    "source_revision": "279b7e997a87c09be00dd6bdda189519ade502cf",
+    "note": "LICENSE-MIT is the canonical SPDX MIT license text, retained verbatim with its placeholder copyright line. It is NOT an upstream file: upstream published no text, so no copyright holder or year is asserted here. It accompanies the manifest's MIT declaration so the notice bundle carries the referenced permission notice."
+  },
+  "documents": {
+    "LICENSE-MIT": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+  },
+  "reason": "The build reported no original legal files in this registry package because upstream never published one. The vendored manifest (hash-bound above) is the license declaration itself. Retain the canonical MIT text, disclosed as non-upstream, rather than fabricate an upstream attribution. The approved original manifest must match byte-for-byte; the archive checksum must match Cargo.lock. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "The crates.io 0.2.2 archive checksum 260bbc7148a8d6818ac5032a1b9970da1a68bdd723d45b12d59f7c1bf3565e24 matches Cargo.lock. The vendored Cargo.toml.orig sha256 matches manifest_sha256 in the Nix vendor tree. Repository absence was checked against the GitHub tree at the publish revision and full file listings of both SeaQL/sea-bae and davidpdrsn/bae. The SPDX text sha256 is recorded in documents and was fetched from spdx/license-list-data at the recorded revision."
+}

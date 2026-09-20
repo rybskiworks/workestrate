@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "msb_krun_kernel",
+    "version": "0.1.34",
+    "source": "git+https://github.com/rybskiworks/libkrun?rev=9c0c8b517d5685672a89a7bf6810ef9a114ec07b#9c0c8b517d5685672a89a7bf6810ef9a114ec07b",
+    "checksum": null
+  },
+  "manifest_sha256": "84d84b2b831be370830a3fec2a11a43a60217fffd73e2e7a27ecb5f72fd91096",
+  "upstream": {
+    "repository": "https://github.com/rybskiworks/libkrun",
+    "revision": "9c0c8b517d5685672a89a7bf6810ef9a114ec07b",
+    "manifest": "src/kernel/Cargo.toml",
+    "manifest_git_blob": "4ef50e8f88994c01540cc3c8b899755369c66bec",
+    "license_git_blobs": {
+      "LICENSE": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+      "AUTHORS": "2ff16279763ac9270bbc3d267d7366e8b6b5fa1d"
+    }
+  },
+  "documents": {
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "AUTHORS": "8ba84ed11726f5734403ff2812d223ab8af6239c649f6d8d455011a1dd0d7716"
+  },
+  "reason": "The build reported no original legal files in this git-sourced package. Retain the upstream repository-root LICENSE (Apache License 2.0 text) and AUTHORS files without altering the vendored crate or its license expression. The approved original manifest must match byte-for-byte. This is version-scoped supplemental evidence, not a general license fallback.",
+  "verification": "Upstream files were copied byte-for-byte from a local checkout whose HEAD is the pinned revision 9c0c8b517d5685672a89a7bf6810ef9a114ec07b and checked against their Git blob hashes at that revision. The crate manifest src/kernel/Cargo.toml at this revision declares version = \"0.1.34\", matching the lockfile, and the lockfile source pins this exact commit via the rev parameter. The build host verifies the vendored manifest against manifest_sha256; no registry archive exists for this git dependency."
+}
