@@ -147,9 +147,9 @@ pub struct WorkloadJson {
     image: String,
     instances: Vec<String>,
     namespace: String,
-    /// The active context at listing time (G5). Always serialized (null
+    /// The active fleet at listing time (G5). Always serialized (null
     /// when None), matching the PsEntryJson.context convention.
-    context: Option<String>,
+    fleet: Option<String>,
     strategy: String,
     on_conflict: String,
     port: String,
@@ -168,7 +168,7 @@ pub fn workloads_json(
             image: e.image.clone(),
             instances: e.instances.clone(),
             namespace: e.namespace.clone(),
-            context: e.context.clone(),
+            fleet: e.fleet.clone(),
             strategy: e.strategy.clone(),
             on_conflict: e.on_conflict.clone(),
             port: e.port.clone(),

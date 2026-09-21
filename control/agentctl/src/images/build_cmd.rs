@@ -141,10 +141,10 @@ impl SelectSkip {
 
 /// The selector shape (clap conflicts guarantee exactly one per invocation).
 pub enum BuildScope<'a> {
-    /// `build <name>` — one workload in the active context.
+    /// `build <name>` — one workload in the active fleet.
     Name(&'a str),
-    /// bare `build` — all nix-layered workloads in the active context.
-    ActiveContext,
+    /// bare `build` — all nix-layered workloads in the active fleet.
+    ActiveFleet,
     /// `build --fleet <name>` — all nix-layered workloads declared by one
     /// registered fleet.
     Fleet(&'a str),
@@ -253,7 +253,7 @@ pub fn resolve_targets(scope: BuildScope) -> Result<(Vec<BuildTarget>, Vec<Selec
                 Some(name),
             )
         }
-        BuildScope::ActiveContext => {
+        BuildScope::ActiveFleet => {
             let config = crate::config::load_config()?;
             let provenance = crate::merge::get_provenance().unwrap_or_default();
             let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
@@ -770,7 +770,7 @@ pub async fn cmd_workload_build(
 ) -> Result<()> {
     let scope = match (name, fleet, all_fleets) {
         (Some(n), None, false) => BuildScope::Name(n),
-        (None, None, false) => BuildScope::ActiveContext,
+        (None, None, false) => BuildScope::ActiveFleet,
         (None, Some(r), false) => BuildScope::Fleet(r),
         (None, None, true) => BuildScope::AllFleets,
         // clap's conflicts_with declarations make every other shape
@@ -1246,7 +1246,7 @@ mod tests {
 
     /// A2 fixtures: well-formed evaluated out_paths and their computed
     /// content-addressed tags (ctx is None in these tests — each flow test
-    /// pins `set_active_context(None)` + `clear_inline_override()` under
+    /// pins `set_active_fleet(None)` + `clear_inline_override()` under
     /// ENV_TEST_LOCK so no leaked process-global context can flip the tag
     /// to the ctx-carrying form).
     const OUT_A: &str = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-img-pi.tar.gz";
@@ -1257,7 +1257,7 @@ mod tests {
     /// Pin the A2 tag context to None for the duration of a flow test.
     fn pin_no_tag_context() -> std::sync::MutexGuard<'static, ()> {
         let lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         crate::config::clear_inline_override();
         lock
     }

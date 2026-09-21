@@ -13,7 +13,7 @@ use crate::microsandbox::workload::Workload;
 
 ///
 /// `workload_name` is the bare workload name (e.g. "litellm"). The slot is
-/// derived from the active context. `instance_id` (from --instance) is
+/// derived from the active fleet. `instance_id` (from --instance) is
 /// `instance_id` (from `--instance`) and `new_id` (from `--new`,
 /// already-allocated slug) are BOTH validated through `validate_instance_id` —
 /// uniform validation closes the bypass where the old `--new` integer id
@@ -98,7 +98,7 @@ pub fn resolve_dependent_instance_id(
         let state_dir = crate::config::resolve_state_dir();
         let slot = crate::microsandbox::slots::slot_for(
             name,
-            crate::config::active_context_name().as_deref(),
+            crate::config::active_fleet_name().as_deref(),
         );
         return Ok(Some(
             crate::microsandbox::port_registry::auto_allocate_slug(&state_dir, &slot)?,
@@ -136,7 +136,7 @@ pub fn build_instance_spec(
         );
     }
 
-    let context = crate::config::active_context_name();
+    let context = crate::config::active_fleet_name();
     let slot = slot_for(workload_name, context.as_deref());
 
     // UNIFORM validation: whichever of --instance / --new was supplied,
@@ -214,10 +214,10 @@ pub async fn dispatch_service<W: Workload>(
     show_source: bool,
     json: bool,
 ) -> Result<()> {
-    if let Some(name) = config::active_context_name()
+    if let Some(name) = config::active_fleet_name()
         && !json
     {
-        eprintln!("context: {}", name);
+        eprintln!("fleet: {}", name);
     }
     match action {
         ServiceAction::Up {
@@ -249,7 +249,7 @@ pub async fn dispatch_service<W: Workload>(
                     &state_dir,
                     &crate::microsandbox::slots::slot_for(
                         workload.name(),
-                        crate::config::active_context_name().as_deref(),
+                        crate::config::active_fleet_name().as_deref(),
                     ),
                 )?)
             } else {
@@ -282,11 +282,11 @@ pub async fn dispatch_service<W: Workload>(
         } => cmd_down(workload.name(), instance.as_deref(), all_instances, json).await,
         ServiceAction::Logs { instance } => {
             // Resolve the instance name like `up` does: slot from the active
-            // context + optional parallel id (default = the singleton). The
+            // fleet + optional parallel id (default = the singleton). The
             // id passes through the same validate_instance_id gate as
             // up/down (FS-10).
             use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
-            let context = crate::config::active_context_name();
+            let context = crate::config::active_fleet_name();
             let slot = slot_for(workload.name(), context.as_deref());
             if let Some(id) = instance.as_deref() {
                 validate_instance_id(id)?;
@@ -308,10 +308,10 @@ pub async fn dispatch_agent<W: Workload>(
     show_source: bool,
     json: bool,
 ) -> Result<()> {
-    if let Some(name) = config::active_context_name()
+    if let Some(name) = config::active_fleet_name()
         && !json
     {
-        eprintln!("context: {}", name);
+        eprintln!("fleet: {}", name);
     }
     match action {
         AgentAction::Exec {
@@ -340,7 +340,7 @@ pub async fn dispatch_agent<W: Workload>(
                     &state_dir,
                     &crate::microsandbox::slots::slot_for(
                         workload.name(),
-                        crate::config::active_context_name().as_deref(),
+                        crate::config::active_fleet_name().as_deref(),
                     ),
                 )?)
             } else {
@@ -507,7 +507,7 @@ pub async fn cmd_down(
     use crate::microsandbox::runtime::{down_all_instances, down_instance};
     use crate::microsandbox::slots::{instance_name, slot_for, validate_instance_id};
 
-    let context = crate::config::active_context_name();
+    let context = crate::config::active_fleet_name();
     let slot = slot_for(workload_name, context.as_deref());
 
     if all_instances {
@@ -688,7 +688,7 @@ fn everything_interactive_confirm() -> Result<Option<bool>> {
     }
 }
 
-/// The per-scope confirmation prompt for the MANAGED rungs (context /
+/// The per-scope confirmation prompt for the MANAGED rungs (fleet /
 /// config-ref / config). Config keeps the exact legacy down-all wording.
 fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownScope) -> String {
     use crate::microsandbox::runtime::down_scope::DownScope;
@@ -696,13 +696,13 @@ fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownSc
         DownScope::Config => {
             "This will stop EVERY running workestrate sandbox. Continue? [y/N] ".to_string()
         }
-        DownScope::Context(ctx) => format!(
-            "This will stop every workestrate-managed sandbox in context \
-             '{ctx}'. Continue? [y/N] "
+        DownScope::Fleet(fleet) => format!(
+            "This will stop every workestrate-managed sandbox in fleet \
+             '{fleet}'. Continue? [y/N] "
         ),
         DownScope::ConfigRef(r) => format!(
             "This will stop every workestrate-managed sandbox derived from \
-             config ref '{r}' (context '{r}'). Continue? [y/N] "
+             config ref '{r}' (fleet '{r}'). Continue? [y/N] "
         ),
         DownScope::Everything => EVERYTHING_PROMPT.to_string(),
     }
@@ -716,7 +716,7 @@ fn managed_scope_prompt(scope: &crate::microsandbox::runtime::down_scope::DownSc
 /// nonzero (`report_down_aggregate`). An EMPTY selection is Ok and reported
 /// as `0 target(s)` — never an error.
 ///
-/// Gates: the managed rungs (context/config-ref/config) take the standard
+/// Gates: the managed rungs (fleet/config-ref/config) take the standard
 /// single yes-gate (interactive prompt; piped y confirms; `--yes` skips).
 /// EVERYTHING is DOUBLE-GATED: the flag must appear twice AND pass the
 /// yes-gate, whose non-interactive form hard-refuses without `--yes`
@@ -1703,7 +1703,7 @@ mod fs10_tests {
     /// `<slot>@<id>` — the same composition `up` uses.
     #[test]
     fn logs_instance_resolution_matches_up_composition() {
-        // No context: slot == workload name.
+        // No fleet: slot == workload name.
         let slot = slot_for("litellm", None);
         assert_eq!(slot, "litellm");
         assert_eq!(instance_name(&slot, None), "litellm");

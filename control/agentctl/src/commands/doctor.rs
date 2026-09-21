@@ -679,7 +679,7 @@ pub fn doctor_check_config() -> DoctorCheck {
         DoctorCheck::new("config", "OK", message)
     } else {
         DoctorCheck::new("config", "WARN", format!("{} (does not exist)", message))
-            .with_remediation("Run 'workestrate init' to create the config")
+            .with_remediation("Run 'workestrate config init' to create the config")
     }
 }
 
@@ -689,7 +689,7 @@ pub fn doctor_check_fleets() -> Result<DoctorCheck> {
         None => {
             return Ok(
                 DoctorCheck::new("fleets", "WARN", "no registry found".to_string())
-                    .with_remediation("run 'workestrate init'"),
+                    .with_remediation("run 'workestrate config init'"),
             );
         }
     };

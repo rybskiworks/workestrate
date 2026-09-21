@@ -95,8 +95,9 @@ is stale). `nix profile install` is the portable verb: Lix provides no
 ## provision your config and fleet
 
 ```sh
-# Provision the config once per machine, with a fleet attached:
-workestrate config init --fleet <your-fleet-url> --name personal
+# Provision the config once per machine, then attach a fleet:
+workestrate config init
+workestrate fleet add <your-fleet-url> personal
 # Second machine, provisioned from an existing config:
 # workestrate config clone <src-config-or-git-url> [dest-dir]
 # Explicit config for one invocation:
@@ -105,7 +106,6 @@ workestrate config init --fleet <your-fleet-url> --name personal
 # Fleet names come from your fleet, not the tool:
 workestrate --config <config-path> fleet list
 workestrate fleet list
-workestrate context current
 workestrate validate-config
 
 # Pair --config (WHERE the registry lives) with --fleet (WHICH fleet to target):
@@ -144,14 +144,14 @@ workestrate workload exec <agent>
 Scoped teardown takes exactly one selector per invocation:
 
 ```sh
-workestrate down --context <ctx>
+workestrate down --fleet <name>
 ```
 
 Alternatives: `down --all`, `down --config-ref <branch>`, or the double-gated
 `down --everything --everything --yes`. The instance/workload rung stays on
 `workload <name> down [--instance <id> | --all-instances]`. The
 [flag glossary](README.agents.md#flag-glossary) states what `--config`,
-`--context`, `--config-ref`, and `down --context` each select.
+`--fleet`, `--config-ref`, and `down --fleet` each select.
 
 <a id="fleets-and-the-layering-model"></a>
 <a id="secrets-workflow"></a>
@@ -175,7 +175,7 @@ workestrate validate-config
 workestrate workload plan my-service
 workestrate workload up my-service
 workestrate workload logs my-service
-workestrate down --context personal
+workestrate down --fleet personal
 ```
 
 The full pair (service plus dependent agent, secrets, teardown scope) is

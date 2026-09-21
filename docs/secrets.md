@@ -12,7 +12,7 @@ ai-workbench uses [SOPS](https://github.com/getsops/sops) with an [age](https://
 
 Secrets live under the **single config** (`$WORKESTRATE_CONFIG`), not at
 the repo root. Each fleet holds its own `.env.enc` + `.sops.yaml`; a
-user-global secrets layer applies per-key across all contexts.
+user-global secrets layer applies per-key across all fleets.
 
 - Encrypted file: `.env.enc` (committed in each fleet; ciphertext-safe)
 - Decrypted form: never committed; `workestrate run -- <cmd>` injects env vars into a child process; `write-env` writes a plaintext `.env` you must remove yourself.
@@ -41,7 +41,7 @@ consumed by the code; default paths are used regardless.
 |---|---|---|
 | Per-fleet `.env.enc` | `$WORKESTRATE_CONFIG/fleets/<name>/.env.enc` | SOPS-encrypted; ciphertext-safe to commit in the fleet |
 | Per-fleet `.sops.yaml` | `$WORKESTRATE_CONFIG/fleets/<name>/.sops.yaml` | SOPS recipient config; no secrets in it |
-| User-global secrets | `$WORKESTRATE_CONFIG/secrets/.env.local.enc` | Applied per-key across all contexts |
+| User-global secrets | `$WORKESTRATE_CONFIG/secrets/.env.local.enc` | Applied per-key across all fleets |
 | age private key | `~/.config/sops/age/ai-workbench-secrets.txt` (HOST) | NEVER in repo/bundle/`.workestrate/` |
 
 ## `workestrate secrets` flows
@@ -142,7 +142,7 @@ target's `.env.example` when the config fails to load.
 
 Targets the user-global secrets layer at
 `$WORKESTRATE_CONFIG/secrets/.env.local.enc` (XDG config dir in legacy-XDG
-layouts). This layer is applied per-key AFTER the context's domain layers
+layouts). This layer is applied per-key AFTER the fleet's domain layers
 and BEFORE project layers.
 
 ```bash
@@ -185,7 +185,7 @@ Process env is the lowest precedence. Per-key provenance is tracked for
    (per-repo `secrets_file` and `age_key_file` overrides honored from the
    registry `[fleets.<name>]`)
 5. **User-global secrets** (`$WORKESTRATE_CONFIG/secrets/.env.local.enc`) —
-   applied per-key AFTER the context's domain layers, BEFORE project layers
+   applied per-key AFTER the fleet's domain layers, BEFORE project layers
 6. **Trusted project dir** (cwd, if trusted) — may have `.env.enc`
 7. **Local overrides dir**
 

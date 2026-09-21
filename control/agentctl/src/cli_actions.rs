@@ -2,8 +2,8 @@
 //! the library command handlers.
 //!
 //! These enums describe the per-workload / per-domain action surfaces
-//! (`ServiceAction`, `AgentAction`, `FleetAction`, `ContextAction`,
-//! `SourceAction`). They live in the library (not `main.rs`) because the
+//! (`ServiceAction`, `AgentAction`, `FleetAction`, `SourceAction`). They
+//! live in the library (not `main.rs`) because the
 //! `commands::*` handlers pattern-match on them; `main.rs` re-exports them so
 //! the clap parser tree continues to expose the same CLI surface.
 
@@ -188,11 +188,11 @@ pub enum AgentAction {
 pub enum WorkloadAction {
     /// Start a service workload (detached by default; --foreground to block).
     /// Omit the name to start ALL service-kind workloads in the active
-    /// context (ADR 0021 addendum 2026-08-01).
+    /// fleet (ADR 0021 addendum 2026-08-01).
     Up {
         /// Workload name from the merged config. Omit for the batch form:
         /// topo-ordered start of every service-kind workload in the active
-        /// context (agent-kind workloads are printed as SKIPPED).
+        /// fleet (agent-kind workloads are printed as SKIPPED).
         name: Option<String>,
 
         #[arg(short, long, help = "Run in foreground (block until Ctrl-C)")]
@@ -360,13 +360,13 @@ pub enum WorkloadAction {
     /// Build or check the nix-layered images of workloads (spec 21 phase C:
     /// drvPath change detection + the §3.4 skew matrix; the build/load
     /// pipeline itself is phase D). Omit the name for the batch form: all
-    /// nix-layered workloads in the active context (mirrors the bare-up
+    /// nix-layered workloads in the active fleet (mirrors the bare-up
     /// grammar of the ADR 0021 addendum). `--fleet`/`--all-fleets` widen the
     /// scope to registered fleets. NOT kind-routed — `main.rs`
     /// dispatches it early like `workload new`.
     Build {
         /// Workload name from the merged config. Omit for the batch form
-        /// (all nix-layered workloads in the active context).
+        /// (all nix-layered workloads in the active fleet).
         #[arg(conflicts_with_all = ["fleet", "all_fleets"])]
         name: Option<String>,
 
@@ -486,17 +486,10 @@ pub enum ConfigAction {
     /// Scaffolds at the RESOLVED config only — no positional dest. For an
     /// empty scaffold at a custom path, use `workestrate --config <path>
     /// config init` (the global --config flag). To provision a config from an
-    /// existing one, use `workestrate config clone <src> [dest]`.
-    Init {
-        /// Clone and register this fleet URL as fleets/<name>
-        /// after scaffolding the config.
-        #[arg(long)]
-        fleet: Option<String>,
-
-        /// Name for the cloned fleet (only used with --fleet).
-        #[arg(long, default_value = "personal")]
-        name: String,
-    },
+    /// existing one, use `workestrate config clone <src> [dest]`. To register
+    /// a fleet afterwards, use `workestrate fleet add <url> <name>` (or
+    /// `workestrate fleet new <name>` for a local scaffold).
+    Init {},
     /// Provision a config from an existing one (git-clone semantics, ADR
     /// 0025): the registry layer is cloned/copied, fleets are re-cloned or
     /// copied, and registry urls pointing into the source config are
@@ -509,20 +502,6 @@ pub enum ConfigAction {
         /// Destination directory for the new config (default: the resolved
         /// config).
         dest: Option<String>,
-    },
-}
-
-/// Actions for managing workestrate contexts.
-#[derive(Subcommand)]
-pub enum ContextAction {
-    /// List all defined contexts.
-    List,
-    /// Show the currently-resolved context and why it was selected.
-    Current,
-    /// Set the default context (persists settings.default_context in the registry).
-    Use {
-        /// Context name to make the default.
-        name: String,
     },
 }
 

@@ -3,13 +3,13 @@
 //! Drives the REAL config resolution chain end-to-end by executing the
 //! compiled `workestrate` binary as a child process:
 //!
-//!   reference layer → context fleet layers (<home>/fleets/<name>/)
+//!   reference layer → fleet layers (<home>/fleets/<name>/)
 //!   → user-global overrides (<home>/overrides.toml) → trusted project layer
 //!   (<cwd>/workestrate.toml) → local layer.
 //!
 //! Unlike the existing suites, these tests NEVER set `WORKESTRATE_FLEET_DIR`
 //! (that env var bypasses the whole layering/discovery pipeline — single dev
-//! layer, no merge, no trust, no context, no overrides). Instead each test
+//! layer, no merge, no trust, no fleet selection, no overrides). Instead each test
 //! builds a fresh `WORKESTRATE_CONFIG` (ADR 0023 single-config layout):
 //!
 //!   registry_path  = <home>/config.toml
@@ -152,7 +152,7 @@ impl ProdHome {
         // CRITICAL: never leak the bypass/discovery vars into the child.
         c.env_remove("WORKESTRATE_FLEET_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_CONTEXT");
+        c.env_remove("WORKESTRATE_FLEET");
         c.env_remove("AGENTCTL_ROOT");
         // Neutral cwd by default; callers override with .current_dir().
         c.current_dir(&self.scratch);
@@ -195,10 +195,10 @@ fn expect_ok(out: &Output, what: &str) -> String {
     stdout_of(out)
 }
 
-/// A minimal registry with NO contexts (bare `layers` backward-compat) and
-/// the given fleet entries. NOTE (TOML layout): the bare `layers` key
-/// must appear BEFORE any `[table]` header, otherwise it lands inside the
-/// last `[fleets.<name>]` table instead of the registry root.
+/// A minimal registry with NO fleets (bare `layers` backward-compat).
+/// NOTE (TOML layout): the bare `layers` key must appear BEFORE any
+/// `[table]` header, otherwise it lands inside the last table instead of
+/// the registry root.
 fn registry_bare_layers(layers: &[&str]) -> String {
     let mut s = String::from("layers = [");
     s.push_str(
@@ -209,11 +209,6 @@ fn registry_bare_layers(layers: &[&str]) -> String {
             .join(", "),
     );
     s.push_str("]\n\n[settings]\n");
-    for name in layers {
-        s.push_str(&format!(
-            "\n[fleets.{name}]\nurl = \"file:///unused/{name}\"\nref = \"main\"\n"
-        ));
-    }
     s
 }
 
@@ -318,7 +313,7 @@ fn production_untrusted_project_layer_skipped() {
 // 3. 2-LAYER MERGE WITH PROVENANCE
 // ---------------------------------------------------------------------------
 
-/// Two stacked context layers [base, team]: team overrides a field base set
+/// Two stacked fleet layers [base, team]: team overrides a field base set
 /// (memory_mib) and adds another (cpus); base contributes a base-only field
 /// (workdir). `plan --show-source` must show merged values AND [layer]
 /// provenance annotations naming the winning layer per field.
@@ -395,57 +390,56 @@ fn production_two_layer_merge_with_provenance() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. CONTEXT SELECTION
+// 4. FLEET SELECTION
 // ---------------------------------------------------------------------------
 
-/// Registry defines two contexts (`personal` → [a], `work` → [b]) plus a
-/// default_context. Without WORKESTRATE_CONTEXT the default wins; with
-/// WORKESTRATE_CONTEXT=work the env-selected context's layer wins. Each
-/// layer sets a distinct cpus value so the winner is observable in the plan.
+/// Registry registers two fleets (`personal`, `work`) plus a default_fleet.
+/// Without WORKESTRATE_FLEET the default wins; with WORKESTRATE_FLEET=work
+/// the env-selected fleet's layer wins. Each fleet is a single-element
+/// layer set named after the fleet; each layer sets a distinct cpus value
+/// so the winner is observable in the plan.
 #[test]
-fn production_context_selection_env_overrides_default() {
-    let env = ProdHome::new("context-selection");
+fn production_fleet_selection_env_overrides_default() {
+    let env = ProdHome::new("fleet-selection");
     env.write_registry(
-        "[settings]\ndefault_context = \"personal\"\n\n\
-         [contexts.personal]\nlayers = [\"a\"]\n\n\
-         [contexts.work]\nlayers = [\"b\"]\n\n\
-         [fleets.a]\nurl = \"file:///unused/a\"\nref = \"main\"\n\n\
-         [fleets.b]\nurl = \"file:///unused/b\"\nref = \"main\"\n",
+        "[settings]\ndefault_fleet = \"personal\"\n\n\
+         [fleets.personal]\nurl = \"file:///unused/personal\"\nref = \"main\"\n\n\
+         [fleets.work]\nurl = \"file:///unused/work\"\nref = \"main\"\n",
     );
     env.write_layer(
-        "a",
+        "personal",
         "schema_version = 1\n\n[workloads.example-service]\ncpus = 3\n",
     );
     env.write_layer(
-        "b",
+        "work",
         "schema_version = 1\n\n[workloads.example-service]\ncpus = 5\n",
     );
 
-    // Default context (personal → layer a) applies when nothing selects one.
+    // Default fleet (personal) applies when nothing selects one.
     let out = env.run(env.cmd().args(["example-service", "plan"]));
-    let stdout = expect_ok(&out, "plan with default context");
+    let stdout = expect_ok(&out, "plan with default fleet");
     assert!(
         stdout.contains("cpus: 3"),
-        "default context personal (layer a) should yield cpus=3; got:\n{stdout}"
+        "default fleet personal should yield cpus=3; got:\n{stdout}"
     );
     assert!(
         !stdout.contains("cpus: 5"),
-        "work context layer b must not leak into the default; got:\n{stdout}"
+        "work fleet layer must not leak into the default; got:\n{stdout}"
     );
 
-    // WORKESTRATE_CONTEXT=work selects layer b instead.
+    // WORKESTRATE_FLEET=work selects the work fleet instead.
     let mut cmd = env.cmd();
     cmd.args(["example-service", "plan"])
-        .env("WORKESTRATE_CONTEXT", "work");
+        .env("WORKESTRATE_FLEET", "work");
     let out = env.run(&mut cmd);
-    let stdout = expect_ok(&out, "plan with WORKESTRATE_CONTEXT=work");
+    let stdout = expect_ok(&out, "plan with WORKESTRATE_FLEET=work");
     assert!(
         stdout.contains("cpus: 5"),
-        "WORKESTRATE_CONTEXT=work should select layer b (cpus=5); got:\n{stdout}"
+        "WORKESTRATE_FLEET=work should select the work fleet (cpus=5); got:\n{stdout}"
     );
     assert!(
         !stdout.contains("cpus: 3"),
-        "personal context layer a must not leak into work; got:\n{stdout}"
+        "personal fleet layer must not leak into work; got:\n{stdout}"
     );
 
     env.cleanup();
@@ -455,13 +449,13 @@ fn production_context_selection_env_overrides_default() {
 // 5. USER-GLOBAL OVERRIDES
 // ---------------------------------------------------------------------------
 
-/// A context layer sets cpus=3; <home>/overrides.toml [global.workloads.*]
-/// sets cpus=6. User-global overrides sit between the context layers and the
-/// project layer, so the override must win over the context layer.
+/// A fleet layer sets cpus=3; <home>/overrides.toml [global.workloads.*]
+/// sets cpus=6. User-global overrides sit between the fleet layers and the
+/// project layer, so the override must win over the fleet layer.
 /// A second assertion covers the per-config form
 /// ([fleets.<layer>.workloads.*]).
 #[test]
-fn production_user_global_overrides_win_over_context_layers() {
+fn production_user_global_overrides_win_over_fleet_layers() {
     let env = ProdHome::new("user-global-overrides");
     env.write_registry(&registry_bare_layers(&["base"]));
     env.write_layer(
@@ -474,11 +468,11 @@ fn production_user_global_overrides_win_over_context_layers() {
     let stdout = expect_ok(&out, "plan with [global] override");
     assert!(
         stdout.contains("cpus: 6"),
-        "user-global [global] override should win over the context layer; got:\n{stdout}"
+        "user-global [global] override should win over the fleet layer; got:\n{stdout}"
     );
     assert!(
         !stdout.contains("cpus: 3"),
-        "context layer value must be shadowed by the override; got:\n{stdout}"
+        "fleet layer value must be shadowed by the override; got:\n{stdout}"
     );
 
     env.cleanup();
@@ -486,7 +480,7 @@ fn production_user_global_overrides_win_over_context_layers() {
 
 /// Same precedence question for the per-config override form
 /// `[fleets.<layer>.workloads.<wl>]` (applies only when <layer> is in the
-/// active context).
+/// active fleet).
 #[test]
 fn production_per_config_override_applies_to_matching_layer() {
     let env = ProdHome::new("per-config-override");
@@ -563,7 +557,7 @@ fn production_env_union_by_name_end_to_end() {
 // 7. SCHEMA_VERSION ERROR PATH
 // ---------------------------------------------------------------------------
 
-/// A context layer with `schema_version = 3` must fail validate_config at
+/// A fleet layer with `schema_version = 3` must fail validate_config at
 /// config-load time — non-zero exit and the exact
 /// `is not supported (expected 1)` message on stderr — before any KVM work.
 /// (Spec 16: schema_version 1 is the native and only version; 2+ is
@@ -593,7 +587,7 @@ fn production_schema_version_3_refused_at_load() {
 }
 
 /// Same refusal via the (higher-precedence) project layer: trusted project
-/// with schema_version = 3 outranks both reference and context layers.
+/// with schema_version = 3 outranks both reference and fleet layers.
 #[test]
 fn production_schema_version_3_refused_from_project_layer() {
     let env = ProdHome::new("schema-version-project");
@@ -634,7 +628,7 @@ fn production_schema_version_3_refused_from_project_layer() {
 /// mounts, network); the default `plan` Display render must contain every
 /// expected line for the merged result. This is the production-path analogue
 /// of the committed golden render (which uses the WORKESTRATE_FLEET_DIR
-/// bypass) — here the bytes flow through reference → context layers → merge.
+/// bypass) — here the bytes flow through reference → fleet layers → merge.
 #[test]
 fn production_full_plan_render_two_layer_fixture() {
     let env = ProdHome::new("full-render");
@@ -682,7 +676,7 @@ fn production_full_plan_render_two_layer_fixture() {
     let out = env.run(env.cmd().args(["example-service", "plan"]));
     let stdout = expect_ok(&out, "full plan render");
 
-    // Instance name: bare-layers (no contexts) → the bare workload name.
+    // Instance name: bare-layers (no fleets) → the bare workload name.
     for needle in [
         "name: example-service",
         "image: python:3.12-slim",

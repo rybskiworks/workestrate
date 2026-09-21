@@ -89,7 +89,7 @@ impl IsolatedHome {
         c.env_remove("WORKESTRATE_FLEET_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
         c.env_remove("WORKESTRATE_CONFIG");
-        c.env_remove("WORKESTRATE_CONTEXT");
+        c.env_remove("WORKESTRATE_FLEET");
         c.env_remove("SOPS_AGE_KEY_FILE");
         c.stdin(std::process::Stdio::null());
         c

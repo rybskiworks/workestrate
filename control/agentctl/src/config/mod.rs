@@ -50,8 +50,7 @@ pub(crate) use registry::looks_like_git_url;
 #[allow(unused_imports)]
 pub use registry::{
     ConfigSourceKind, effective_ref, entry_is_local_path, load_registry, local_entry_checkout_dir,
-    register_fleet, resolve_active_context, resolve_default_ref, save_registry,
-    set_default_context, source_kind,
+    register_fleet, resolve_active_fleet, resolve_default_ref, save_registry, source_kind,
 };
 #[allow(unused_imports)]
 pub use trust::is_dir_trusted_via_base_registry;
@@ -59,17 +58,17 @@ pub use trust::is_dir_trusted_via_base_registry;
 pub use trust::{is_trusted_project, trust_project, untrust_project};
 #[allow(unused_imports)]
 pub use types::{
-    BakedFileSpec, BinarySpec, Bound, ConfigFile, ConflictStep, Context, CredentialsConfig,
-    DefaultAction, DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry, EgressAllowTable,
-    EgressDenyTable, EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig,
-    FleetEntry, HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable,
-    IngressDenyTable, IngressPolicyFragment, InitConfig, InstancePolicy, InstancePort,
-    InstanceStrategy, LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig,
-    OnConflict, OnSkew, PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain,
-    PortOccupiedStep, Registry, RegistrySettings, SecretDefConfig, SecretViolationPolicy,
-    SecretsLayer, SecretsPolicyFragment, SeedFileConfig, SigningCredentialsConfig,
-    SigningSshCredentialDef, SshCredentialDef, SshPolicyFragment, TrustedProject,
-    VirtualizationConfig, VirtualizationPolicyFragment, WorkloadConfig, WorkloadCredentials,
+    BakedFileSpec, BinarySpec, Bound, ConfigFile, ConflictStep, CredentialsConfig, DefaultAction,
+    DepConflict, DepInstanceMode, DependsOnSpec, DomainEntry, EgressAllowTable, EgressDenyTable,
+    EgressPolicyFragment, EnvBinding, EnvBindings, EnvSecretRef, EnvVarConfig, FleetEntry,
+    HostEntry, IdnaMode, IdnaPolicyFragment, ImageSpec, IngressAllowTable, IngressDenyTable,
+    IngressPolicyFragment, InitConfig, InstancePolicy, InstancePort, InstanceStrategy,
+    LocalBuildConfig, NestedMode, NetworkConfig, NetworkDefaultsConfig, OnConflict, OnSkew,
+    PolicyConfig, PortEntry, PortOccupiedBare, PortOccupiedChain, PortOccupiedStep, Registry,
+    RegistrySettings, SecretDefConfig, SecretViolationPolicy, SecretsLayer, SecretsPolicyFragment,
+    SeedFileConfig, SigningCredentialsConfig, SigningSshCredentialDef, SshCredentialDef,
+    SshPolicyFragment, TrustedProject, VirtualizationConfig, VirtualizationPolicyFragment,
+    WorkloadConfig, WorkloadCredentials,
 };
 #[allow(unused_imports)]
 pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_fleet_name};
@@ -77,38 +76,38 @@ pub use validation::{EXPECTED_SCHEMA_VERSION, validate_config, validate_fleet_na
 use anyhow::Result;
 use std::path::PathBuf;
 
-/// The resolved active context.
-/// `name` is None when no contexts are defined (bare-layers backward-compat).
+/// The resolved active fleet.
+/// `name` is None when no fleets are registered (bare-layers mode).
 #[derive(Debug, Clone)]
-pub struct ActiveContext {
+pub struct ActiveFleet {
     pub name: Option<String>,
     pub layers: Vec<String>,
 }
 
-/// The active context for this process (WP10/A9).
+/// The active fleet for this process (WP10/A9).
 ///
 /// This used to be a `thread_local!` `RefCell`. On a tokio MULTI-THREAD
 /// runtime (main.rs builds `tokio::runtime::Builder::new_multi_thread()`) a
 /// task can be migrated across OS threads between `.await` points, so a value
 /// stored in a plain `thread_local` on one thread could be read on a
 /// DIFFERENT thread after an await — returning `None` or a stale value. The
-/// active context is set once per command invocation (inside `load_config`,
+/// active fleet is set once per command invocation (inside `load_config`,
 /// which also resolves it) and is inherently process-level state, so a
 /// `std::sync::Mutex` is the correct primitive: no thread affinity, no
 /// scope-establishment requirement (unlike `tokio::task_local!`, which would
 /// need `TaskLocal::scope` at task spawn — a main.rs change that is out of
 /// scope — and panics outside its scope). Lock poisoning is recovered with
-/// `into_inner()` so a panic elsewhere can never wedge context resolution.
-static ACTIVE_CONTEXT: std::sync::Mutex<Option<ActiveContext>> = std::sync::Mutex::new(None);
+/// `into_inner()` so a panic elsewhere can never wedge fleet resolution.
+static ACTIVE_FLEET: std::sync::Mutex<Option<ActiveFleet>> = std::sync::Mutex::new(None);
 
-/// Store the active context for this process.
-pub fn set_active_context(ctx: Option<ActiveContext>) {
-    *ACTIVE_CONTEXT.lock().unwrap_or_else(|e| e.into_inner()) = ctx;
+/// Store the active fleet for this process.
+pub fn set_active_fleet(ctx: Option<ActiveFleet>) {
+    *ACTIVE_FLEET.lock().unwrap_or_else(|e| e.into_inner()) = ctx;
 }
 
-/// Get the active context name (None = bare-layers backward-compat).
-pub fn active_context_name() -> Option<String> {
-    ACTIVE_CONTEXT
+/// Get the active fleet name (None = bare-layers mode).
+pub fn active_fleet_name() -> Option<String> {
+    ACTIVE_FLEET
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
@@ -275,46 +274,46 @@ pub(crate) mod tests {
         );
     }
 
-    // ---- WP10/A9: active-context storage is process-global ----
+    // ---- WP10/A9: active-fleet storage is process-global ----
 
-    /// A9 regression: a context set on one OS thread must be readable on a
+    /// A9 regression: a fleet set on one OS thread must be readable on a
     /// DIFFERENT thread (a plain thread_local would return None there — the
     /// exact failure mode on a tokio multi-thread runtime after task
-    /// migration). Uses ENV_TEST_LOCK because set_active_context is process
+    /// migration). Uses ENV_TEST_LOCK because set_active_fleet is process
     /// global and other tests mutate it.
     #[test]
-    fn active_context_set_from_another_thread_is_visible() {
+    fn active_fleet_set_from_another_thread_is_visible() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        set_active_context(None);
+        set_active_fleet(None);
         std::thread::spawn(|| {
-            set_active_context(Some(ActiveContext {
+            set_active_fleet(Some(ActiveFleet {
                 name: Some("personal".to_string()),
                 layers: vec!["personal".to_string()],
             }));
         })
         .join()
         .expect("setter thread panicked");
-        assert_eq!(active_context_name(), Some("personal".to_string()));
-        set_active_context(None); // clean up for other tests
+        assert_eq!(active_fleet_name(), Some("personal".to_string()));
+        set_active_fleet(None); // clean up for other tests
     }
 
     #[test]
-    fn active_context_survives_tokio_multi_thread_migration() {
+    fn active_fleet_survives_tokio_multi_thread_migration() {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .build()
             .expect("failed to build multi-thread runtime");
         rt.block_on(async {
-            set_active_context(Some(ActiveContext {
+            set_active_fleet(Some(ActiveFleet {
                 name: Some("work".to_string()),
                 layers: vec!["work".to_string()],
             }));
             for _ in 0..100 {
                 tokio::task::yield_now().await;
             }
-            assert_eq!(active_context_name(), Some("work".to_string()));
+            assert_eq!(active_fleet_name(), Some("work".to_string()));
         });
-        set_active_context(None);
+        set_active_fleet(None);
     }
 }

@@ -134,15 +134,15 @@ ai-workbench/
 
 [settings]
 # Tool-level settings (not workload-specific)
-default_context = "personal"        # default layer-set name (contexts deferred; this is the layers list name)
+default_fleet = "personal"          # default fleet; the active fleet is its own layer
 config_version = 1                  # config layout version for future migrations (ADR 0023)
 store_dir = "$WORKESTRATE_CONFIG"     # managed clones + sources (config-relative by default)
 state_dir = "$WORKESTRATE_CONFIG/state"  # runtime state (workspaces, var; config-relative by default)
 
 # ─── Registry of fleets ───────────────────────────────────────────────
 # Each entry is a fleet that workestrate clones and consumes.
-# `workestrate config add <url> <name>` adds an entry here.
-# `workestrate config update <name>` pulls latest and updates `rev`.
+# `workestrate fleet add <url> <name>` adds an entry here.
+# `workestrate fleet update <name>` pulls latest and updates `rev`.
 
 [fleets.personal]
 url = "git@github.com:<your-user>/workestrate-config-personal.git"  # the private personal fleet
@@ -154,34 +154,21 @@ url = "git@github.com:work-org/workestrate-config-team.git"
 ref = "main"
 rev = "789abc012def3456789abc012def456789abc012"
 
-# ─── Ordered layers (Phase 3; Phase 1 uses single-layer or manual order) ────
-# The order is the merge order: earlier layers are overridden by later ones.
-# Security-aware merge applies (see §11). Contexts (named layer-sets) are
-# deferred until 3+ layers exist.
-
-layers = ["work", "personal"]
-
-# ─── Contexts (named layer-sets; Phase 3.5) ─────────────────────────────────
-# Named contexts allow switching between layer-sets without editing the
-# registry. Selection: --context flag > WORKESTRATE_CONTEXT env >
-# [settings] default_context > bare layers (backward compat when no
-# contexts are defined).
-
-[contexts.personal]
-layers = ["personal"]
-
-[contexts.work]
-layers = ["work", "personal"]
+# ─── Fleet selection ────────────────────────────────────────────────────────
+# The active fleet IS its own layer (a resolved named fleet maps to a
+# single-element layer set). Selection: --fleet flag > WORKESTRATE_FLEET env
+# > [settings] default_fleet. A bare top-level `layers = [...]` stack is only
+# legal in configs with no registered fleets.
 
 # ─── Trusted projects (project-layer config trust gating) ──────────────────
-# `workestrate config trust <dir>` adds a project directory here.
+# `workestrate fleet trust <dir>` adds a project directory here.
 # Only trusted projects' ./workestrate.toml is loaded as a project layer.
 # Untrusted projects' ./workestrate.toml is ignored (security: prevents
 # malicious project dirs from injecting config).
 
 [[trusted_projects]]
 # Placeholder paths in this synthetic spec example; replace with real
-# operator directories via `workestrate config trust <dir>`.
+# operator directories via `workestrate fleet trust <dir>`.
 path = "/home/node/Development/my-project"
 
 [[trusted_projects]]
@@ -192,15 +179,14 @@ path = "/home/node/Development/another-project"
 
 | Section | Field | Type | Default | Description |
 |---|---|---|---|---|
-| `[settings]` | `default_context` | string | `"personal"` | Default layer-set name (contexts deferred) |
+| `[settings]` | `default_fleet` | string | `"personal"` | Default fleet (the active fleet is its own layer) |
 | `[settings]` | `config_version` | integer | `1` | Config layout version for future migrations (ADR 0023) |
 | `[settings]` | `store_dir` | string | `$WORKESTRATE_CONFIG` | Managed clones + sources root (config-relative by default; overridable) |
 | `[settings]` | `state_dir` | string | `$WORKESTRATE_CONFIG/state` | Runtime state root (config-relative by default; overridable) |
 | `[fleets.<name>]` | `url` | string | (required) | Git URL for the fleet |
 | `[fleets.<name>]` | `ref` | string | `"main"` | Git ref to track |
 | `[fleets.<name>]` | `rev` | string | (auto) | Pinned commit hash (updated by `config update`) |
-| `layers` | (array) | array of strings | `[]` | Ordered list of fleet names to merge |
-| `[contexts.<name>]` | `layers` | array of strings | (required) | Ordered list of fleet names for this context |
+| `layers` | (array) | array of strings | `[]` | Ordered list of fleet names to merge (configs with no registered fleets only) |
 | `[[trusted_projects]]` | `path` | string | (required) | Absolute path to a trusted project directory |
 
 `store_dir` and `state_dir` are config-relative by default (`$WORKESTRATE_CONFIG`
@@ -737,7 +723,7 @@ Closed vocabulary — new packages added via core review (ADR 0003).
 ```
 1. Tool built-in defaults     (compiled into workestrate binary)
 2. Reference config           (config.reference/workestrate.toml, shipped with tool)
-3. Context layers             (resolved context's `layers` array; see Context resolution below)
+3. Fleet layer                (the resolved fleet is its own layer; see Fleet resolution below)
 4. User-global overrides      ($WORKESTRATE_CONFIG/overrides.toml: [global] then [fleets.<name>])
 5. Trusted project config     (./workestrate.toml in cwd, IF cwd is in [trusted_projects])
 6. Local overrides             (./workestrate.local.toml in cwd, gitignored)
@@ -754,13 +740,12 @@ fn discover_config() -> Result<Config> {
     // 2. Load registry
     let registry = load_registry(&config.join("config.toml"))?;  // $WORKESTRATE_CONFIG/config.toml
 
-    // 3. Load + merge layers (in order)
+    // 3. Resolve the active fleet and load its layer
     let mut config = load_reference_config()?;  // config.reference/workestrate.toml
-    for layer_name in &registry.layers {
-        let repo_path = registry.store_dir.join("fleets").join(layer_name);
-        let layer_config = load_single(&repo_path)?;
-        config = merge(config, layer_config)?;  // security-aware merge (§11)
-    }
+    let fleet = resolve_active_fleet(&registry)?;  // --fleet → WORKESTRATE_FLEET → default_fleet
+    let repo_path = registry.store_dir.join("fleets").join(&fleet.name);
+    let layer_config = load_single(&repo_path)?;
+    config = merge(config, layer_config)?;  // security-aware merge (§11)
 
     // 4. Trusted project layer
     if let Ok(project_config) = load_project_layer(&registry.trusted_projects) {
@@ -780,22 +765,22 @@ fn discover_config() -> Result<Config> {
 }
 ```
 
-### Context resolution
+### Fleet resolution
 
-The active context is resolved per invocation:
+The active fleet is resolved per invocation:
 
-1. `--context <name>` CLI flag (sets `WORKESTRATE_CONTEXT` env)
-2. `WORKESTRATE_CONTEXT` env var
-3. `[settings] default_context` in the registry
-4. If NO contexts defined: bare `layers` array (backward compat — existing
+1. `--fleet <name>` CLI flag (sets `WORKESTRATE_FLEET` env)
+2. `WORKESTRATE_FLEET` env var
+3. `[settings] default_fleet` in the registry
+4. If NO fleets registered: bare `layers` array (backward compat — existing
    registries work unchanged; golden-check stays byte-identical)
 
-One invocation resolves exactly ONE context. Its layers merge per the
-existing engine. Secrets merge per-key within the context.
+One invocation resolves exactly ONE fleet. The active fleet is its own
+single-element layer set. Secrets merge per-key within the fleet.
 
-When contexts are defined, sandbox instance names become `<context>-<workload>`
-(bare names preserved when no contexts exist). This prevents port and state
-collisions between contexts.
+When fleets are registered, sandbox instance names become `<fleet>-<workload>`
+(bare names preserved when no fleets exist). This prevents port and state
+collisions between fleets.
 
 ### Fail-closed behavior (no config)
 
@@ -807,7 +792,7 @@ On a fresh install with no registry, no fleets:
 - `workestrate workload exec pi` / `workestrate workload up litellm` REFUSE if the workload is not
   defined in the active config. With only the synthetic reference loaded, those
   names do not exist; the user must add a fleet via
-  `workestrate config add <url> personal`.
+  `workestrate fleet add <url> personal`.
 - The synthetic reference uses placeholder secrets; if a workload is present it
   would be rejected by `reject_if_placeholder` (`runtime.rs:10-22`).
 
@@ -822,7 +807,7 @@ On a fresh install with no registry, no fleets:
 | `workestrate completions <shell>` | Generate shell completions | `main.rs:236-239` |
 | `workestrate run -- <cmd>` | Run arbitrary command with decrypted secrets | `main.rs:266-297` |
 | `workestrate workload plan <name> [--show-source]` | Print sandbox plan (optionally with per-field provenance) | `main.rs:131-135` |
-| `workestrate workload up [<name>] [--foreground] [--replace\|--instance <id>\|--new] [--port-auto] [--no-deps] [--use <slot@id>] [--reseed] [--json]` | Start service(s) (service kind). Default: refuse if slot occupied (ADR 0021). Bare `up` (no `<name>`) starts ALL service-kind workloads in the active context, topo-ordered (ADR 0021 addendum 2026-08-01). Declared `depends_on` deps start by default (topo-ordered closure, singleton slots; `--no-deps` opts out — ADR 0026 addendum 2026-08-01). `--reseed` re-renders `template = true` seed_files over their existing targets (bypassing `only_if_missing` for those entries; static seeds unchanged); name-scoped only | `main.rs:126-136` |
+| `workestrate workload up [<name>] [--foreground] [--replace\|--instance <id>\|--new] [--port-auto] [--no-deps] [--use <slot@id>] [--reseed] [--json]` | Start service(s) (service kind). Default: refuse if slot occupied (ADR 0021). Bare `up` (no `<name>`) starts ALL service-kind workloads in the active fleet, topo-ordered (ADR 0021 addendum 2026-08-01). Declared `depends_on` deps start by default (topo-ordered closure, singleton slots; `--no-deps` opts out — ADR 0026 addendum 2026-08-01). `--reseed` re-renders `template = true` seed_files over their existing targets (bypassing `only_if_missing` for those entries; static seeds unchanged); name-scoped only | `main.rs:126-136` |
 | `workestrate workload down <name> [--instance <id>\|--all-instances]` | Stop and remove sandbox (singleton, named parallel instance, or all) | `main.rs:129` |
 | `workestrate workload logs <name> [--instance <id>]` | Tail detached service log (service kind) | `main.rs:130` |
 | `workestrate workload exec <name> [--replace\|--instance <id>\|--new] [--no-deps] [--use <slot@id>] [--reseed] [--json]` | Attach interactively (agent kind). Default: refuse if slot occupied (ADR 0021). `depends_on` deps start by default (ADR 0026 addendum 2026-08-01; agent-kind deps refuse — agents are interactive). `--reseed` re-renders `template = true` seed_files over their existing targets (same semantics as `up --reseed`) | `main.rs:138-147` |
@@ -871,14 +856,13 @@ enum Commands {
 
 | Command | Behavior |
 |---|---|
-| `workestrate config add <url> <name> [--ref main]` | Clone fleet to `$WORKESTRATE_CONFIG/fleets/<name>/`, add to registry |
-| `workestrate config update [name]` | Pull latest ref for named repo (or all), update `rev` in registry |
-| `workestrate config list` | List registered fleets with rev + dirty status |
-| `workestrate config new <name> [<dest>]` | Scaffold a new fleet (ADR 0022). Defaults to in-store `$WORKESTRATE_CONFIG/fleets/<name>` and registers; an out-of-store `<dest>` scaffolds WITHOUT registering + prints guidance (ADR 0022 addendum 2026-08-01) |
-| `workestrate config remove <name>` | Remove a fleet from the registry |
-| `workestrate config trust <dir>` | Add project directory to `[trusted_projects]` |
-| `workestrate config untrust <dir>` | Remove a project directory from `[trusted_projects]` |
-| `workestrate init <dotfiles-url>` | Bootstrap: clone dotfiles, read registry, clone fleets, provision secrets |
+| `workestrate fleet add <url> <name> [--ref main]` | Clone fleet to `$WORKESTRATE_CONFIG/fleets/<name>/`, add to registry |
+| `workestrate fleet update [name]` | Pull latest ref for named repo (or all), update `rev` in registry |
+| `workestrate fleet list` | List registered fleets with rev + dirty status |
+| `workestrate fleet new <name> [<dest>]` | Scaffold a new fleet (ADR 0022). Defaults to in-store `$WORKESTRATE_CONFIG/fleets/<name>` and registers; an out-of-store `<dest>` scaffolds WITHOUT registering + prints guidance (ADR 0022 addendum 2026-08-01) |
+| `workestrate fleet remove <name>` | Remove a fleet from the registry |
+| `workestrate fleet trust <dir>` | Add project directory to `[trusted_projects]` |
+| `workestrate fleet untrust <dir>` | Remove a project directory from `[trusted_projects]` |
 | `workestrate config init` | Initialize an empty config (zero positionals; explicit init, never auto-init — ADR 0025) |
 | `workestrate config clone <src> [<dest>]` | Provision a config from a source (url/bundle); selective copy (never `state/`); generates `workestrate.lock` (ADR 0025) |
 | `workestrate migrate-config` | Migrate a legacy XDG three-directory layout into the single config; stamps `config_version = 2` (ADR 0023) |
@@ -893,8 +877,8 @@ enum Commands {
 | `workestrate secrets schema` | Print REQUIRED_KEYS from config `secrets:` section (replaces `.env.example` grep) |
 | ~~`workestrate secrets-target` / `secrets-schema`~~ | Removed pre-launch (breaking change); use `secrets target` / `secrets schema` |
 | `workestrate generate-env-example` | Generate `.env.example` from config `secrets:` section |
-| `workestrate ps [--json] [--all-contexts]` | List running workestrate sandboxes for the active context (or all contexts). `--json` emits the instance-record array (ADR 0021 §7) |
-| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes` |
+| `workestrate ps [--json]` | List running workestrate sandboxes for the active fleet. `--json` emits the instance-record array (ADR 0021 §7) |
+| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/fleets. Destructive; confirms unless `--yes` |
 | `workestrate generate-schema` | Print the JSON Schema for `workestrate.toml` to stdout (schemars-derived; ADR 0021 §8). Committed copy at `schemas/workestrate.schema.json` |
 | `workestrate clean` | Remove `$WORKESTRATE_CONFIG/state/` contents (workspaces, var; NOT sources/repos) |
 
@@ -1194,19 +1178,19 @@ Attribution labels: `[core]` (tool defaults), `[reference]` (config.reference/),
 ### overrides.toml
 
 `$WORKESTRATE_CONFIG/overrides.toml` (optional) provides
-machine-local config overrides that apply across all contexts or to
+machine-local config overrides that apply across all fleets or to
 specific fleets.
 
 ```toml
 # spec-test: skip
-# Applied to every context
+# Applied to every fleet
 [global]
 # Any ConfigFile field: schema_version, secrets, workloads
 
 [global.workloads.pi]
 cpus = 4
 
-# Applied only when "team" is in the active context's layers
+# Applied only when "team" is the active fleet
 [fleets.team]
 
 [fleets.team.workloads.pi]
@@ -1216,7 +1200,7 @@ memory_mib = 4096
 #### Precedence
 
 ```
-reference < context layers < [global] < [fleets.<name>] < trusted project < project local
+reference < fleet layers < [global] < [fleets.<name>] < trusted project < project local
 ```
 
 Each section is a ConfigFile fragment merged as a layer by the same engine
@@ -1228,7 +1212,7 @@ Each section is a ConfigFile fragment merged as a layer by the same engine
 | Scenario | Behavior |
 |---|---|
 | Missing overrides.toml | Silently absent (no error) |
-| `[fleets.team]` when team not in context | Skip + INFO log |
+| `[fleets.team]` when team is not the active fleet | Skip + INFO log |
 | `[fleets.team.workloads.nonexistent]` | Skip + INFO log |
 | Unknown field in matched section | Loud WARNING (probable typo) |
 | Override sets `defaults.egress = "allow"` on non-entitled workload | Hard error (merge engine) |
@@ -1238,11 +1222,11 @@ Each section is a ConfigFile fragment merged as a layer by the same engine
 ### .env.local.enc
 
 `$WORKESTRATE_CONFIG/secrets/.env.local.enc` (optional) provides
-machine-local secret values applied per-key AFTER the context's domain
+machine-local secret values applied per-key AFTER the fleet's domain
 layers, BEFORE project layers.
 
 ```
-Secrets precedence: process env < reference < context layers < user-global .env.local.enc < trusted project < local
+Secrets precedence: process env < reference < fleet layers < user-global .env.local.enc < trusted project < local
 ```
 
 `workestrate secrets --global init|update` targets this file (mutually
@@ -1255,8 +1239,8 @@ exclusive with `--fleet`).
 
 A workload's sandbox identity is a **slot**, not a bare name. A slot is one of:
 
-- **Singleton slot** — `<workload>` (no context active) or `<context>-<workload>`
-  (context active; ADR 0019). At most one sandbox may occupy a singleton slot.
+- **Singleton slot** — `<workload>` (no fleet active) or `<fleet>-<workload>`
+  (fleet active; ADR 0019). At most one sandbox may occupy a singleton slot.
 - **Parallel instance slot** — `<slot>@<id>`, where `<id>` is an instance slug.
 
 **Instance id slug rules:**
@@ -1296,7 +1280,7 @@ refuses. Existing scripts that relied on `up` as an idempotent restart must add
 | `workestrate workload down <name>` | Stop the singleton slot's instance. Refuses (with names) if the slot has parallel instances. |
 | `workestrate workload down <name> --instance <id>` | Stop the parallel instance `<slot>@<id>`. |
 | `workestrate workload down <name> --all-instances` | Stop the singleton AND every parallel instance of `<name>`. Destructive; explicit. |
-| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/contexts. Destructive; confirms unless `--yes`. |
+| `workestrate down --all [--yes]` | Stop every running workestrate sandbox across all workloads/fleets. Destructive; confirms unless `--yes`. |
 
 ### Parallel-instance addressing (ADR 0026)
 
@@ -1316,7 +1300,7 @@ sandboxes are reported with `stale: true` and a remediation hint.
 ### JSON output shapes
 
 `--json` is accepted on: `ps`, `plan`, `validate-config`, `check`,
-`config list`, `source list`, and the refuse/error envelope for
+`fleet list`, `source list`, and the refuse/error envelope for
 `up`/`exec`/`down`.
 
 **`workestrate ps --json`** — array of instance records:

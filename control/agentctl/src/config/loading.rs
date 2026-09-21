@@ -59,11 +59,11 @@ use crate::config::paths::{
     ConfigDirKind, expand_tilde, overrides_path, reference_config_path,
     resolve_config_dir_with_kind, resolve_store_dir, xdg_config_dir,
 };
-use crate::config::registry::{load_registry, resolve_active_context};
+use crate::config::registry::{load_registry, resolve_active_fleet};
 use crate::config::trust::is_trusted_project;
 use crate::config::types::{CONFIG_FIELDS, WORKLOAD_FIELDS};
 use crate::config::validation::validate_config;
-use crate::config::{ConfigFile, FleetEntry, Registry, SecretsLayer, set_active_context};
+use crate::config::{ConfigFile, FleetEntry, Registry, SecretsLayer, set_active_fleet};
 
 /// One row in the `agentctl check` report.
 #[derive(Debug, Clone)]
@@ -168,16 +168,16 @@ pub fn check_required_files(root: &Path) -> Result<Vec<CheckEntry>> {
 /// Load user-global override layers from overrides.toml.
 ///
 /// Returns layers in precedence order: [global] first, then [fleets.<name>]
-/// for each name in `context_layers` (in order). Missing overrides.toml →
+/// for each name in `fleet_layers` (in order). Missing overrides.toml →
 /// empty vec (silently absent).
 ///
 /// LENIENT semantics:
-/// - Unknown config section ([fleets.team] when team not in context) → skip + INFO log
+/// - Unknown config section ([fleets.team] when team is not an active fleet layer) → skip + INFO log
 /// - Unknown workload section ([fleets.team.workloads.nonexistent]) → skip + INFO log
 /// - Unknown field in a matched section → loud WARNING (probable typo)
 pub fn load_overrides(
     overrides_path: &Path,
-    context_layers: &[String],
+    fleet_layers: &[String],
     existing_workloads: &std::collections::HashSet<String>,
 ) -> Result<Vec<crate::merge::Layer>> {
     if !overrides_path.exists() {
@@ -200,7 +200,7 @@ pub fn load_overrides(
 
     let mut layers = Vec::new();
 
-    // [global] section — applied to every context.
+    // [global] section — applied to every fleet.
     if let Some(global) = raw.get("global").and_then(|v| v.as_table()) {
         let processed = process_override_section(global, "global", existing_workloads)?;
         if !processed.is_empty() {
@@ -212,16 +212,16 @@ pub fn load_overrides(
         }
     }
 
-    // [fleets.<name>] sections — only when name is in context_layers.
+    // [fleets.<name>] sections — only when name is in fleet_layers.
     if let Some(fleets) = raw.get("fleets").and_then(|v| v.as_table()) {
         for (name, value) in fleets {
             let table = match value.as_table() {
                 Some(t) => t,
                 None => continue,
             };
-            if !context_layers.contains(name) {
+            if !fleet_layers.contains(name) {
                 eprintln!(
-                    "INFO: override section [fleets.{}] has no matching fleet in this context, skipping",
+                    "INFO: override section [fleets.{}] has no matching fleet in this fleet, skipping",
                     name
                 );
                 continue;
@@ -283,7 +283,7 @@ fn process_override_section(
             .collect();
         for k in &unknown {
             eprintln!(
-                "INFO: override section [{}.workloads.{}] has no matching workload in this context, skipping",
+                "INFO: override section [{}.workloads.{}] has no matching workload in this fleet, skipping",
                 section_path, k
             );
             workloads.remove(k);
@@ -327,8 +327,8 @@ fn process_override_section(
 ///    top for cwd-derived roots).
 /// 2. Registry layers (`registry.layers` ordered list, each a fleet).
 /// 3. User-global overrides (`$XDG_CONFIG_HOME/workestrate/overrides.toml`):
-///    `[global]` is applied to every context, then `[fleets.<name>]` for each
-///    active context layer.
+///    `[global]` is applied to every fleet, then `[fleets.<name>]` for each
+///    active fleet layer.
 /// 4. Trusted project config (`./workestrate.toml` in cwd if trusted).
 /// 5. Local overrides (`./workestrate.local.toml` in cwd).
 ///
@@ -349,7 +349,7 @@ pub fn load_config() -> Result<ConfigFile> {
                      fleet)"
                 );
             }
-            set_active_context(None);
+            set_active_fleet(None);
             let layer = crate::merge::Layer::load("local", &path)?;
             let collected = collect_policy_scopes(None, std::slice::from_ref(&layer))?;
             let ladder = collect_secret_policy_ladder(None, std::slice::from_ref(&layer));
@@ -383,34 +383,31 @@ pub fn load_config() -> Result<ConfigFile> {
         layers.push(crate::merge::Layer::load("reference", &path)?);
     }
 
-    // 3. Resolve active context and load its layers. Each layer's CONTENT
+    // 3. Resolve the active fleet and load its layers. Each layer's CONTENT
     //    ROOT comes from `layer_content_root` (A5 Session 2: pinned archive
     //    consumption for Remote/GitFile entries, content-as-is for
     //    PlainPath; see the module doc).
-    let active_context = resolve_active_context()?;
-    set_active_context(Some(active_context.clone()));
-    for name in &active_context.layers {
+    let active_fleet = resolve_active_fleet()?;
+    set_active_fleet(Some(active_fleet.clone()));
+    for name in &active_fleet.layers {
         let content_root = match registry.as_ref() {
             Some(reg) => layer_content_root(name, reg)?,
             // No registry → no configs map to classify against; keep the
             // historical store path (unreachable in practice: a registry-less
-            // resolve_active_context yields no layers).
+            // resolve_active_fleet yields no layers).
             None => resolve_store_dir().join("fleets").join(name),
         };
         layers.extend(load_fleet_layers(name, &content_root)?);
     }
 
-    // 3.5. User-global overrides (between context layers and trusted project).
+    // 3.5. User-global overrides (between fleet layers and trusted project).
     {
         let existing_workloads: std::collections::HashSet<String> = layers
             .iter()
             .flat_map(|l| l.config.workloads.keys().cloned())
             .collect();
-        let override_layers = load_overrides(
-            &overrides_path(),
-            &active_context.layers,
-            &existing_workloads,
-        )?;
+        let override_layers =
+            load_overrides(&overrides_path(), &active_fleet.layers, &existing_workloads)?;
         layers.extend(override_layers);
     }
 
@@ -468,7 +465,9 @@ pub fn load_config() -> Result<ConfigFile> {
     }
 
     if layers.is_empty() {
-        anyhow::bail!("no config found; run 'workestrate init' or set WORKESTRATE_FLEET_DIR");
+        anyhow::bail!(
+            "no config found; run 'workestrate config init' or set WORKESTRATE_FLEET_DIR"
+        );
     }
 
     let mut layer_dirs = crate::merge::layer_dirs_from(&layers);
@@ -1148,7 +1147,7 @@ fn replace_workload_ssh_rungs_from_layer(
 /// shared by `load_config` (layer files) and `resolve_secrets_layers`
 /// (`.env.enc` rides the same root — it is committed encrypted content).
 ///
-/// - Entry absent from the registry (a context naming an unregistered
+/// - Entry absent from the registry (a fleet layer naming an unregistered
 ///   layer): the historical store path, unchanged (a missing dir yields no
 ///   layers, as before).
 /// - [`ConfigSourceKind::PlainPath`]: [`local_entry_checkout_dir`] when the
@@ -1390,7 +1389,7 @@ fn refs_map_locked_archive(
 ///
 /// `pub(crate)` for spec 21 phase C: the `workload build --repo/--all-repos`
 /// selectors load one registered repo's OWN layers through this (the repo's
-/// declarations, not the active-context merge).
+/// declarations, not the active-fleet merge).
 pub(crate) fn load_fleet_layers(name: &str, repo_dir: &Path) -> Result<Vec<crate::merge::Layer>> {
     let file_path = repo_dir.join("workestrate.toml");
     let dir_path = repo_dir.join("workestrate");
@@ -1673,15 +1672,15 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
         });
     }
 
-    // 3. Context layers in declared order, each with its own .env.enc. The
+    // 3. Fleet layers in declared order, each with its own .env.enc. The
     //    secrets dir is the SAME content root as config consumption (A5
     //    Session 2): the pinned archive dir for Remote/GitFile entries
     //    (.env.enc is committed encrypted content and rides the archive like
     //    any other file), the plain-path dir unchanged otherwise.
     let registry = load_registry()?;
-    let active_context = resolve_active_context()?;
+    let active_fleet = resolve_active_fleet()?;
     if let Some(registry) = registry {
-        for name in &active_context.layers {
+        for name in &active_fleet.layers {
             let dir = layer_content_root(name, &registry)?;
             let entry = registry.fleets.get(name);
             let secrets_mode = entry.and_then(|e| e.secrets.as_deref()).unwrap_or("file");
@@ -1703,7 +1702,7 @@ pub fn resolve_secrets_layers() -> Result<Vec<SecretsLayer>> {
     }
 
     // 4. User-global secrets layer (.env.local.enc in the active config's
-    // secrets dir). Applied per-key AFTER the context's domain layers, BEFORE
+    // secrets dir). Applied per-key AFTER the fleet's domain layers, BEFORE
     // project layers. Optional — missing file is handled gracefully by decrypt_layer().
     let (config_dir, kind) = resolve_config_dir_with_kind();
     let global_dir = match kind {
@@ -1913,7 +1912,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn load_overrides_configs_section_only_when_in_context() -> Result<()> {
+    fn load_overrides_configs_section_only_when_in_fleet() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-ov-match-{}-{}",
             std::process::id(),
@@ -1928,7 +1927,7 @@ pub(crate) mod tests {
             "[fleets.team.workloads.pi]\ncpus = 2\n\n[fleets.other.workloads.pi]\ncpus = 8\n",
         );
         let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
-        // Only "team" is in context_layers; "other" should be skipped.
+        // Only "team" is in fleet_layers; "other" should be skipped.
         let layers = load_overrides(&path, &["team".to_string()], &existing)?;
         assert_eq!(
             layers.len(),
@@ -2084,8 +2083,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn load_overrides_global_applied_in_two_contexts() -> Result<()> {
-        // [global] should produce a layer regardless of which context is active.
+    fn load_overrides_global_applied_in_two_fleets() -> Result<()> {
+        // [global] should produce a layer regardless of which fleet is active.
         let tmp = std::env::temp_dir().join(format!(
             "workestrate-ov-two-ctx-{}-{}",
             std::process::id(),
@@ -2098,12 +2097,12 @@ pub(crate) mod tests {
         let path = write_overrides(&tmp, "[global.workloads.pi]\ncpus = 4\n");
         let existing: std::collections::HashSet<String> = ["pi".to_string()].into_iter().collect();
 
-        // Context 1: personal
+        // Fleet 1: personal
         let layers1 = load_overrides(&path, &["personal".to_string()], &existing)?;
         assert_eq!(layers1.len(), 1);
         assert_eq!(layers1[0].name, "global-override");
 
-        // Context 2: work
+        // Fleet 2: work
         let layers2 = load_overrides(&path, &["team".to_string()], &existing)?;
         assert_eq!(layers2.len(), 1);
         assert_eq!(layers2[0].name, "global-override");
@@ -2113,7 +2112,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resolve_secrets_layers_includes_user_global_after_context() -> Result<()> {
+    fn resolve_secrets_layers_includes_user_global_after_fleet() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let tmp_home = std::env::temp_dir().join(format!(
             "workestrate-secrets-global-{}-{}",
@@ -2135,11 +2134,11 @@ pub(crate) mod tests {
         init_git_repo(&repo_dir, &[("workestrate.toml", "schema_version = 1\n")]);
         let pinned_rev = crate::git::git_rev_parse(&repo_dir)?;
 
-        // Registry with a context and a fleet
+        // Registry with a default fleet
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[fleets.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
+                "[settings]\ndefault_fleet = \"personal\"\n\n[fleets.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
             ),
         )?;
 
@@ -2150,7 +2149,7 @@ pub(crate) mod tests {
         let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
         let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
         let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        let old_ctx = std::env::var("WORKESTRATE_FLEET").ok();
         let old_ref = std::env::var("WORKESTRATE_REFERENCE_CONFIG").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -2162,7 +2161,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
         // Opt into the reference base layer (cleanup phase 2): under cargo
         // test CARGO_MANIFEST_DIR pins the repo root, so the reference layer
         // resolves deterministically.
@@ -2198,9 +2197,9 @@ pub(crate) mod tests {
         }
         match old_ctx {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET") },
         }
         match old_ref {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -2210,7 +2209,7 @@ pub(crate) mod tests {
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
-        // Expected layers: reference (opted in above), personal (context
+        // Expected layers: reference (opted in above), personal (fleet
         // layer), user-global (trusted project is not present because cwd
         // has no workestrate.toml)
         let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
@@ -2222,7 +2221,7 @@ pub(crate) mod tests {
         );
         assert!(
             names.contains(&"personal"),
-            "context layer 'personal' should be present: {:?}",
+            "fleet layer 'personal' should be present: {:?}",
             names
         );
         assert!(
@@ -2231,12 +2230,12 @@ pub(crate) mod tests {
             names
         );
 
-        // user-global should come AFTER personal (context layer)
+        // user-global should come AFTER personal (fleet layer)
         let personal_idx = names.iter().position(|n| *n == "personal").unwrap();
         let global_idx = names.iter().position(|n| *n == "user-global").unwrap();
         assert!(
             global_idx > personal_idx,
-            "user-global should come after context layers: {:?}",
+            "user-global should come after fleet layers: {:?}",
             names
         );
 
@@ -2271,11 +2270,11 @@ pub(crate) mod tests {
         init_git_repo(&repo_dir, &[("workestrate.toml", "schema_version = 1\n")]);
         let pinned_rev = crate::git::git_rev_parse(&repo_dir)?;
 
-        // Registry with a context
+        // Registry with a default fleet
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[fleets.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
+                "[settings]\ndefault_fleet = \"personal\"\n\n[fleets.personal]\nurl = \"git@example.com:personal.git\"\nref = \"main\"\nrev = \"{pinned_rev}\"\n"
             ),
         )?;
 
@@ -2284,7 +2283,7 @@ pub(crate) mod tests {
         let old_xdg_config = std::env::var("XDG_CONFIG_HOME").ok();
         let old_xdg_data = std::env::var("XDG_DATA_HOME").ok();
         let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        let old_ctx = std::env::var("WORKESTRATE_FLEET").ok();
 
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("HOME", &tmp_home) };
@@ -2295,7 +2294,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
 
         let layers = resolve_secrets_layers()?;
 
@@ -2326,9 +2325,9 @@ pub(crate) mod tests {
         }
         match old_ctx {
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
+            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET", v) },
             // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
+            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET") },
         }
         let _ = std::fs::remove_dir_all(&tmp_home);
 
@@ -3458,7 +3457,7 @@ write.deny = ["sugar-write-deny"]
         "WORKESTRATE_CONFIG",
         "WORKESTRATE_FLEET_DIR",
         "WORKESTRATE_NO_PROJECT_CONFIG",
-        "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_FLEET",
         "WORKESTRATE_CONFIG_REF",
         "WORKESTRATE_REFERENCE_CONFIG",
         "WORKESTRATE_STATE_DIR",
@@ -3521,7 +3520,7 @@ write.deny = ["sugar-write-deny"]
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONFIG_REF") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -3531,8 +3530,10 @@ write.deny = ["sugar-write-deny"]
         config_dir
     }
 
-    /// Registry TOML for a single-layer config. `extra_entry_lines` carries
-    /// e.g. `rev = "..."`.
+    /// Registry TOML for a single-layer config: the fleet is registered and
+    /// made the default_fleet (fleets-registered homes resolve the active
+    /// fleet as that single layer). `extra_entry_lines` carries e.g.
+    /// `rev = "..."`.
     fn a5_registry(
         name: &str,
         url: &str,
@@ -3543,7 +3544,7 @@ write.deny = ["sugar-write-deny"]
             .map(|r| format!("ref = \"{r}\"\n"))
             .unwrap_or_default();
         format!(
-            "layers = [\"{name}\"]\n\n[fleets.{name}]\nurl = \"{url}\"\n{ref_line}{extra_entry_lines}"
+            "layers = [\"{name}\"]\n\n[settings]\ndefault_fleet = \"{name}\"\n\n[fleets.{name}]\nurl = \"{url}\"\n{ref_line}{extra_entry_lines}"
         )
     }
 
@@ -3912,10 +3913,12 @@ write.deny = ["sugar-write-deny"]
         sha
     }
 
-    /// --config-ref resolves EVERY git-backed entry at the ref: two Remote
-    /// entries with primary pins on main both consume their feat-x content;
-    /// the PRIMARY pins are NOT moved, and the resolutions land in each
-    /// entry's refs map.
+    /// --config-ref resolves the ACTIVE fleet's git-backed entry at the ref:
+    /// two Remote entries with primary pins on main each consume their feat-x
+    /// content when they are the selected (default) fleet in turn; the
+    /// PRIMARY pins are NOT moved, and each resolution lands in that entry's
+    /// refs map. (Multi-fleet configs select ONE fleet per invocation — the
+    /// retired multi-layer stack is exercised per fleet here.)
     #[test]
     fn config_ref_resolves_every_git_entry_at_the_ref() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -3940,10 +3943,6 @@ write.deny = ["sugar-write-deny"]
             "feat-x",
             &[("workestrate.toml", &a5_marker_toml("beta-feat"))],
         );
-        std::fs::write(
-            config_dir.join("config.toml"),
-            "layers = [\"alpha\", \"beta\"]\n\n[fleets.alpha]\nurl = \"https://example.invalid/alpha.git\"\nref = \"main\"\n\n[fleets.beta]\nurl = \"https://example.invalid/beta.git\"\nref = \"main\"\n",
-        )?;
         // Primary pins on main for BOTH entries (S2 shape).
         let mut lock = crate::config::ConfigLock {
             version: crate::config::LOCK_VERSION,
@@ -3964,41 +3963,49 @@ write.deny = ["sugar-write-deny"]
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
-        let cfg = load_config()?;
+        for (name, feat, other) in [
+            ("alpha", &alpha_feat, "beta"),
+            ("beta", &beta_feat, "alpha"),
+        ] {
+            std::fs::write(
+                config_dir.join("config.toml"),
+                format!(
+                    "layers = [\"{name}\"]\n\n[settings]\ndefault_fleet = \"{name}\"\n\n[fleets.alpha]\nurl = \"https://example.invalid/alpha.git\"\nref = \"main\"\n\n[fleets.beta]\nurl = \"https://example.invalid/beta.git\"\nref = \"main\"\n"
+                ),
+            )?;
 
-        for feat in ["alpha-feat", "beta-feat"] {
+            let cfg = load_config()?;
             assert!(
-                cfg.workloads.contains_key(feat),
-                "both entries must be consumed at feat-x: {:?}",
+                cfg.workloads.contains_key(&format!("{name}-feat")),
+                "the active fleet {name} must be consumed at feat-x: {:?}",
                 cfg.workloads.keys().collect::<Vec<_>>()
             );
-        }
-        for main_rev in ["alpha_main", "beta_main"] {
             assert!(
-                !cfg.workloads.contains_key(main_rev),
-                "the primary (main) content must NOT leak into a --config-ref load"
+                !cfg.workloads.contains_key(&format!("{other}-feat")),
+                "the unselected fleet {other} must NOT be consumed"
             );
+            for main_rev in ["alpha_main", "beta_main"] {
+                assert!(
+                    !cfg.workloads.contains_key(main_rev),
+                    "the primary (main) content must NOT leak into a --config-ref load"
+                );
+            }
+            // The archive comes from feat-x's sha.
+            assert!(
+                crate::config::archive_dir(feat)?
+                    .join("workestrate.toml")
+                    .exists()
+            );
+            // Lock: the active entry's refs map carries feat-x; PRIMARY pins
+            // unmoved for BOTH entries.
+            let lock = crate::config::load_config_lock()?.expect("lock");
+            assert_eq!(lock.fleets[name].refs["feat-x"].sha, *feat);
+            assert_eq!(
+                lock.fleets["alpha"].rev.as_deref(),
+                Some(alpha_main.as_str())
+            );
+            assert_eq!(lock.fleets["beta"].rev.as_deref(), Some(beta_main.as_str()));
         }
-        // Both archives come from feat-x's shas.
-        assert!(
-            crate::config::archive_dir(&alpha_feat)?
-                .join("workestrate.toml")
-                .exists()
-        );
-        assert!(
-            crate::config::archive_dir(&beta_feat)?
-                .join("workestrate.toml")
-                .exists()
-        );
-        // Lock: refs map carries feat-x; PRIMARY pins unmoved.
-        let lock = crate::config::load_config_lock()?.expect("lock");
-        assert_eq!(
-            lock.fleets["alpha"].rev.as_deref(),
-            Some(alpha_main.as_str())
-        );
-        assert_eq!(lock.fleets["beta"].rev.as_deref(), Some(beta_main.as_str()));
-        assert_eq!(lock.fleets["alpha"].refs["feat-x"].sha, alpha_feat);
-        assert_eq!(lock.fleets["beta"].refs["feat-x"].sha, beta_feat);
 
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
@@ -4116,7 +4123,9 @@ write.deny = ["sugar-write-deny"]
 
     /// PlainPath entries are UNAFFECTED by --config-ref: content-as-is
     /// (an edit is visible on the very next load), no archive, no lock
-    /// entry — while the git-backed sibling entry IS pinned at the ref.
+    /// entry. The git-backed sibling IS pinned at the ref when it is the
+    /// selected fleet. (Each fleet is selected in turn — the retired
+    /// multi-layer stack is exercised per fleet here.)
     #[test]
     fn config_ref_leaves_plain_path_entries_unaffected() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
@@ -4135,20 +4144,21 @@ write.deny = ["sugar-write-deny"]
             "feat-x",
             &[("workestrate.toml", &a5_marker_toml("team-feat"))],
         );
-        std::fs::write(
-            config_dir.join("config.toml"),
+        let registry = |default: &str| {
             format!(
-                "layers = [\"plain\", \"team\"]\n\n[fleets.plain]\nurl = \"{}\"\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n",
+                "layers = [\"{default}\"]\n\n[settings]\ndefault_fleet = \"{default}\"\n\n[fleets.plain]\nurl = \"{}\"\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n",
                 plain.display()
-            ),
-        )?;
+            )
+        };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
+        // Phase 1: the PlainPath fleet is active — content-as-is under
+        // --config-ref; the git sibling is not consumed.
+        std::fs::write(config_dir.join("config.toml"), registry("plain"))?;
         let cfg = load_config()?;
         assert!(cfg.workloads.contains_key("plain-v1"));
-        assert!(cfg.workloads.contains_key("team-feat"));
-        assert!(!cfg.workloads.contains_key("team_main"));
+        assert!(!cfg.workloads.contains_key("team-feat"));
 
         // Content-as-is: an edit to the plain dir is visible on the NEXT
         // load even under --config-ref.
@@ -4158,10 +4168,19 @@ write.deny = ["sugar-write-deny"]
             cfg.workloads.contains_key("plain-v2"),
             "plain-path consumption stays content-as-is under --config-ref"
         );
-        assert!(cfg.workloads.contains_key("team-feat"));
+        // The plain entry never enters the lock.
+        if let Some(lock) = crate::config::load_config_lock()? {
+            assert!(
+                !lock.fleets.contains_key("plain"),
+                "plain-path entries never enter the lock"
+            );
+        }
 
-        // Lock: the git-backed entry has its refs pin; the plain entry has
-        // NO lock entry at all.
+        // Phase 2: the git-backed fleet is active — it IS pinned at the ref.
+        std::fs::write(config_dir.join("config.toml"), registry("team"))?;
+        let cfg = load_config()?;
+        assert!(cfg.workloads.contains_key("team-feat"));
+        assert!(!cfg.workloads.contains_key("team_main"));
         let lock = crate::config::load_config_lock()?.expect("lock");
         assert!(lock.fleets["team"].refs.contains_key("feat-x"));
         assert!(

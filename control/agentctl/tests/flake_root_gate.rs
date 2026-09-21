@@ -96,7 +96,7 @@ fn gate_cmd(home: &Path, config_dir: &Path, cwd: &Path) -> Command {
     c.env("WORKESTRATE_FLEET_DIR", config_dir);
     c.env_remove("WORKESTRATE_STATE_DIR");
     c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-    c.env_remove("WORKESTRATE_CONTEXT");
+    c.env_remove("WORKESTRATE_FLEET");
     c.env_remove("WORKESTRATE_CONFIG");
     c.env_remove("AGENTCTL_ROOT");
     c.env_remove("CARGO_MANIFEST_DIR");

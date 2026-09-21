@@ -540,7 +540,7 @@ impl Workload for ConfigWorkload {
     }
 
     fn sandbox_instance_name(&self) -> String {
-        match crate::config::active_context_name() {
+        match crate::config::active_fleet_name() {
             Some(ctx) => format!("{}-{}", ctx, self.name),
             None => self.name.clone(),
         }
@@ -1092,8 +1092,8 @@ mod tests {
     fn sandbox_instance_name_bare_when_no_context() -> Result<()> {
         let _guard = TestConfigGuard::new();
         // TestConfigGuard sets WORKESTRATE_FLEET_DIR which bypasses the registry,
-        // so active_context_name() is None.
-        crate::config::set_active_context(None);
+        // so active_fleet_name() is None.
+        crate::config::set_active_fleet(None);
         let pi = ConfigWorkload::new("pi")?;
         assert_eq!(pi.sandbox_instance_name(), "pi");
         assert_eq!(pi.name(), "pi");
@@ -1121,16 +1121,16 @@ mod tests {
     fn sandbox_instance_namespaced_when_context_active() -> Result<()> {
         let _guard = TestConfigGuard::new();
         let pi = ConfigWorkload::new("pi")?;
-        // Simulate an active context after creating the workload; load_config()
-        // resets the active context when WORKESTRATE_FLEET_DIR is set.
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        // Simulate an active fleet after creating the workload; load_config()
+        // resets the active fleet when WORKESTRATE_FLEET_DIR is set.
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
         assert_eq!(pi.sandbox_instance_name(), "personal-pi");
         assert_eq!(pi.name(), "pi"); // bare name unchanged for CLI dispatch
         // Clean up
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         Ok(())
     }
 

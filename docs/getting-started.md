@@ -7,21 +7,21 @@ execution requires Linux/KVM; reading CLI help does not.
 ## Configuration
 
 ```sh
-# Provision the config once per machine, with a fleet attached:
-workestrate config init --fleet <your-fleet-url> --name personal
+# Provision the config once per machine, then attach a fleet:
+workestrate config init
+workestrate fleet add <your-fleet-url> personal
 # Second machine from an existing config:
 # workestrate config clone <src-config-or-git-url> [dest-dir]
 # Explicit config for one invocation:
 # workestrate --config <config-path> config init
 workestrate --config <config-path> fleet list
 workestrate fleet list
-workestrate context current
 workestrate validate-config
 workestrate workload plan example-service
 ```
 
 `--config <DIR>` selects the config root (registry, overrides,
-state/store). It does not select which config layers are active, and a
+state/store). It does not select which fleet is active, and a
 different `--config` alone does not relocate all backend state (`MSB_HOME`
 stays separate). `config init` is idempotent; it is not a request to migrate
 an existing Microsandbox home.

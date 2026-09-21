@@ -886,7 +886,7 @@ pub(crate) mod tests {
 
     #[test]
     fn config_version_defaults_to_absent() -> Result<()> {
-        let toml_no_version = "[settings]\ndefault_context = \"personal\"\n";
+        let toml_no_version = "[settings]\ndefault_fleet = \"personal\"\n";
         let reg: Registry = toml::from_str(toml_no_version)?;
         assert_eq!(reg.settings.config_version, None);
         // Round-trip preserves absence.

@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use workestrate::cli_actions::{
-    AgentAction, ConfigAction, ContextAction, FleetAction, ImagesAction, PolicyAction,
-    SchemasAction, SecretsAction, ServiceAction, SourceAction, WorkloadAction,
+    AgentAction, ConfigAction, FleetAction, ImagesAction, PolicyAction, SchemasAction,
+    SecretsAction, ServiceAction, SourceAction, WorkloadAction,
 };
 use workestrate::cli_error::{classify_exit_code, emit_error};
 use workestrate::commands::config_cmd::cmd_config;
@@ -15,10 +15,8 @@ use workestrate::commands::diagnostics::{
     cmd_run, cmd_validate_config, cmd_workloads,
 };
 use workestrate::commands::doctor::cmd_doctor;
-use workestrate::commands::fleet_cmd::{
-    cmd_context, cmd_fleet, cmd_fleet_list_json, cmd_fleet_new,
-};
-use workestrate::commands::init::{cmd_init, cmd_new};
+use workestrate::commands::fleet_cmd::{cmd_fleet, cmd_fleet_list_json, cmd_fleet_new};
+use workestrate::commands::init::cmd_new;
 use workestrate::commands::lifecycle::{
     WorkloadRoute, cmd_clean, cmd_down_ladder, dispatch_agent, dispatch_service,
     resolve_dependent_instance_id, workload_route,
@@ -46,14 +44,14 @@ struct Cli {
     #[arg(long, global = true, help = "Show source layer for each plan field")]
     show_source: bool,
 
-    #[arg(long, global = true, help = "Active context name")]
-    context: Option<String>,
+    #[arg(long, global = true, help = "Active fleet name")]
+    fleet: Option<String>,
 
     #[arg(
         long,
         global = true,
         value_name = "REF",
-        help = "Consume every git-backed config entry at this branch/sha and derive the context from it (ADR 0032 addendum: the --config-ref ladder rung)"
+        help = "Consume every git-backed config entry at this branch/sha and derive the fleet from it (ADR 0032 addendum: the --config-ref ladder rung)"
     )]
     config_ref: Option<String>,
 
@@ -90,12 +88,6 @@ enum Commands {
     },
     /// Runtime/config sanity check
     Check,
-    /// Initialize workestrate configuration (DEPRECATED: use `config init`;
-    /// the [url] dotfiles positional errors — use `config clone <src>`)
-    Init {
-        /// DEPRECATED: passing a url errors; use `config clone <src>` instead
-        url: Option<String>,
-    },
     /// Scaffold a new agent project (DEPRECATED: use `workload new <name>`)
     #[command(hide = true)]
     New {
@@ -148,7 +140,7 @@ enum Commands {
     /// Use --json for machine-readable output.
     Ps,
     /// Stop sandboxes at an explicit scope (ADR 0032 addendum §Down scope
-    /// ladder: instance < workload < context < config-ref < config <
+    /// ladder: instance < workload < fleet < config-ref < config <
     /// everything). Exactly ONE scope selector per invocation; bare `down`
     /// is a usage error naming the ladder. The instance/workload rungs stay
     /// on `workload <name> down [--instance|--all-instances]`.
@@ -157,22 +149,22 @@ enum Commands {
     Down {
         /// Config scope: every workestrate-managed target (back-compat with
         /// the former `down-all` behavior).
-        #[arg(long, conflicts_with_all = ["context", "config_ref", "everything"])]
+        #[arg(long, conflicts_with_all = ["fleet", "config_ref", "everything"])]
         all: bool,
-        /// Context scope: every managed target whose record context
-        /// (primary) or `<ctx>-` slot prefix (corroborating) matches.
-        #[arg(long, value_name = "CTX", conflicts_with_all = ["all", "config_ref", "everything"])]
-        context: Option<String>,
+        /// Fleet scope: every managed target whose record fleet
+        /// (primary) or `<fleet>-` slot prefix (corroborating) matches.
+        #[arg(long, value_name = "FLEET", conflicts_with_all = ["all", "config_ref", "everything"])]
+        fleet: Option<String>,
         /// Config-ref scope: a VALIDATED branch-shaped ref; resolves as the
-        /// context the branch implies (a sha implies nothing and is refused).
-        #[arg(long, value_name = "REF", conflicts_with_all = ["all", "context", "everything"])]
+        /// fleet the branch implies (a sha implies nothing and is refused).
+        #[arg(long, value_name = "REF", conflicts_with_all = ["all", "fleet", "everything"])]
         config_ref: Option<String>,
         /// Everything scope (DOUBLE-GATED): give it TWICE plus the standard
         /// yes-gate; stops EVERY msb sandbox including unmanaged ones.
         #[arg(
             long,
             action = clap::ArgAction::Count,
-            conflicts_with_all = ["all", "context", "config_ref"]
+            conflicts_with_all = ["all", "fleet", "config_ref"]
         )]
         everything: u8,
         /// Skip the interactive confirmation.
@@ -189,11 +181,6 @@ enum Commands {
     Images {
         #[command(subcommand)]
         action: ImagesAction,
-    },
-    /// Manage workestrate contexts
-    Context {
-        #[command(subcommand)]
-        action: ContextAction,
     },
     /// Print the JSON Schema for workestrate.toml to stdout (or write to
     /// --output; `--out` is accepted as a hidden back-compat alias).
@@ -812,19 +799,19 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         // concurrent mutation of this key.
         unsafe { std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1") };
     }
-    if let Some(ref ctx) = cli.context {
+    if let Some(ref fleet) = cli.fleet {
         // SAFETY: startup-phase write-once CLI override, set before any
         // command flow reads it and before any spawned tasks mutate env; no
         // concurrent mutation of this key.
-        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", ctx) };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET", fleet) };
     }
     // --config-ref <branch|sha> populates WORKESTRATE_CONFIG_REF (ADR 0032
     // addendum §Selection ladder, A5 Session 3a): the pinned-consumption
     // layer (config::loading) resolves every Remote/GitFile entry at that
-    // ref, and the context-derivation ladder
-    // (config::registry::resolve_active_context step b) reads a
-    // branch-shaped ref as the context-name candidate. Setting it as an env
-    // var (like --context/--config) propagates the override to detached
+    // ref, and the fleet-derivation ladder
+    // (config::registry::resolve_active_fleet step b) reads a
+    // branch-shaped ref as the fleet-name candidate. Setting it as an env
+    // var (like --fleet/--config) propagates the override to detached
     // children via spawn env inheritance.
     if let Some(ref config_ref) = cli.config_ref {
         // SAFETY: startup-phase write-once CLI override, set before any
@@ -879,7 +866,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             }
         },
         Commands::Check => cmd_check(),
-        Commands::Init { url } => cmd_init(url.as_deref()),
         Commands::New { name } => {
             eprintln!(
                 "warning: `workestrate new <name>` is deprecated; use `workestrate workload new <name>`"
@@ -898,14 +884,14 @@ async fn async_main(args: Vec<String>) -> Result<()> {
         Commands::Ps => cmd_ps(cli.json).await,
         Commands::Down {
             all,
-            context,
+            fleet,
             config_ref,
             everything,
             yes,
         } => {
             let scope = workestrate::microsandbox::runtime::down_scope::resolve_cli_scope(
                 all,
-                context.as_deref(),
+                fleet.as_deref(),
                 config_ref.as_deref(),
                 everything,
             )?;
@@ -917,7 +903,6 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             // user decision 3); cleanup-family aggregate exit rule applies.
             ImagesAction::Gc {} => workestrate::images::gc::cmd_images_gc(cli.json).await,
         },
-        Commands::Context { action } => cmd_context(action, cli.json).await,
         Commands::GenerateSchema {
             output,
             output_workload,
@@ -1020,7 +1005,7 @@ async fn async_main(args: Vec<String>) -> Result<()> {
             }
             // ADR 0021 addendum 2026-08-01: bare `workload up` (no name) is
             // the batch form — a topo-ordered start of ALL service-kind
-            // workloads in the active context. Per-slot/per-dependent flags
+            // workloads in the active fleet. Per-slot/per-dependent flags
             // are not meaningful for batch up and are hard errors naming
             // the offending flag. `--reload-images` is the exception (spec
             // 21 §5.2, USER DECISION D3): batch-scoped, threaded into
@@ -1394,7 +1379,6 @@ mod tests {
         for expected in [
             "control",
             "check",
-            "init",
             "new",
             "completions",
             "run",
@@ -1408,7 +1392,6 @@ mod tests {
             "doctor",
             "versions",
             "clean",
-            "context",
             "source",
             "migrate-config",
             "workload",
@@ -1423,6 +1406,14 @@ mod tests {
             assert!(
                 !names.contains(&removed),
                 "typed subcommand must not exist: {removed}"
+            );
+        }
+        // Retired vocabulary: the `context` subcommand and the deprecated
+        // top-level `init` are gone.
+        for removed in ["context", "init"] {
+            assert!(
+                !names.contains(&removed),
+                "retired subcommand must not exist: {removed}"
             );
         }
     }
@@ -2047,7 +2038,7 @@ mod tests {
     /// selector whose collision history is exactly why no NEW --from may be
     /// added; `fleet new --from-reference` is a different flag and is
     /// UNAFFECTED; the dropped `config init --from` per ADR 0025 stays
-    /// dropped, per the config_init_has_no_path_flag guard).
+    /// dropped, per the config_init_cli_shape guard).
     #[test]
     fn no_from_flag_anywhere_in_the_command_tree() {
         fn assert_no_from(cmd: &clap::Command, path: &str) {
@@ -2120,7 +2111,7 @@ mod tests {
     }
 
     #[test]
-    fn config_init_has_no_path_flag() {
+    fn config_init_cli_shape() {
         let cmd = Cli::command();
         let init = cmd
             .find_subcommand("config")
@@ -2131,12 +2122,14 @@ mod tests {
             .filter_map(|a| a.get_long().map(|s| s.to_string()))
             .collect();
         assert!(
-            long_names.contains(&"fleet".to_string()),
-            "config init missing --fleet flag; got: {long_names:?}"
+            !long_names.contains(&"fleet".to_string()),
+            "config init must NOT have a --fleet flag (fleet registration lives \
+             on 'fleet add'/'fleet new'); got: {long_names:?}"
         );
         assert!(
-            long_names.contains(&"name".to_string()),
-            "config init missing --name flag; got: {long_names:?}"
+            !long_names.contains(&"name".to_string()),
+            "config init must NOT have a --name flag (fleet registration lives \
+             on 'fleet add'/'fleet new'); got: {long_names:?}"
         );
         assert!(
             !long_names.contains(&"path".to_string()),
@@ -2711,7 +2704,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&state_dir)?;
 
-        workestrate::config::set_active_context(None);
+        workestrate::config::set_active_fleet(None);
         let slot = slot_for("litellm", None);
         assert_eq!(slot, "litellm");
 
@@ -2769,24 +2762,24 @@ mod tests {
             match cli.command {
                 Commands::Down {
                     all,
-                    context,
+                    fleet,
                     config_ref,
                     everything,
                     yes,
                 } => {
                     assert!(all, "--all must be set for: {argv:?}");
-                    assert!(context.is_none() && config_ref.is_none());
+                    assert!(fleet.is_none() && config_ref.is_none());
                     assert_eq!(everything, 0);
                     assert_eq!(yes, argv.contains(&"--yes"), "yes flag for: {argv:?}");
                 }
                 _ => panic!("expected Commands::Down for: {argv:?}"),
             }
         }
-        // Context / config-ref / everything rungs.
-        let cli = Cli::try_parse_from(["workestrate", "down", "--context", "personal"])
-            .expect("context scope must parse");
+        // Fleet / config-ref / everything rungs.
+        let cli = Cli::try_parse_from(["workestrate", "down", "--fleet", "personal"])
+            .expect("fleet scope must parse");
         match cli.command {
-            Commands::Down { context, .. } => assert_eq!(context.as_deref(), Some("personal")),
+            Commands::Down { fleet, .. } => assert_eq!(fleet.as_deref(), Some("personal")),
             _ => panic!("expected Commands::Down"),
         }
         let cli = Cli::try_parse_from(["workestrate", "down-all", "--config-ref", "feat-x"])
@@ -2829,11 +2822,11 @@ mod tests {
     #[test]
     fn root_down_scope_selectors_conflict() {
         let cases: [&[&str]; 6] = [
-            &["workestrate", "down", "--all", "--context", "x"],
+            &["workestrate", "down", "--all", "--fleet", "x"],
             &["workestrate", "down", "--all", "--config-ref", "y"],
             &["workestrate", "down", "--all", "--everything"],
-            &["workestrate", "down", "--context", "x", "--config-ref", "y"],
-            &["workestrate", "down", "--context", "x", "--everything"],
+            &["workestrate", "down", "--fleet", "x", "--config-ref", "y"],
+            &["workestrate", "down", "--fleet", "x", "--everything"],
             &["workestrate", "down", "--config-ref", "y", "--everything"],
         ];
         for argv in cases {
@@ -2853,12 +2846,12 @@ mod tests {
         match cli.command {
             Commands::Down {
                 all,
-                context,
+                fleet,
                 config_ref,
                 everything,
                 ..
             } => {
-                assert!(!all && context.is_none() && config_ref.is_none() && everything == 0);
+                assert!(!all && fleet.is_none() && config_ref.is_none() && everything == 0);
             }
             _ => panic!("expected Commands::Down"),
         }
@@ -2866,7 +2859,7 @@ mod tests {
             workestrate::microsandbox::runtime::down_scope::resolve_cli_scope(false, None, None, 0)
                 .unwrap_err()
                 .to_string();
-        for scope in ["--all", "--context", "--config-ref", "--everything"] {
+        for scope in ["--all", "--fleet", "--config-ref", "--everything"] {
             assert!(err.contains(scope), "usage error must list {scope}: {err}");
         }
     }
@@ -3001,7 +2994,7 @@ mod tests {
     // --- spec 21 phase C: `workload build` grammar (§5.1) ------------------
 
     /// Bare `workload build` parses with name=None (the batch form: all
-    /// nix-layered workloads in the active context) and default flags.
+    /// nix-layered workloads in the active fleet) and default flags.
     #[test]
     fn workload_build_bare_parses_as_batch_form_with_defaults() {
         let cli = Cli::try_parse_from(["workestrate", "workload", "build"])

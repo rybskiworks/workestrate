@@ -158,7 +158,7 @@ loopback addressing. `host = 0` port declarations and `--port-auto` probe a free
 port at boot. See [operating semantics](docs/operating-model.md) and ADRs 0021/0026.
 
 Scoped teardown takes exactly one selector per invocation. The safe,
-narrow example is `workestrate down --context <ctx>`. Alternatives are
+narrow example is `workestrate down --fleet <name>`. Alternatives are
 `down --all`, `down --config-ref <branch>`, and the double-gated
 `down --everything --everything --yes`; these are alternatives, not one
 command to paste verbatim. The instance/workload rung stays on
@@ -202,8 +202,8 @@ workestrate ps --json
 ```
 
 `workload down <name>` tears down one workload slot. Wider scopes use the
-separate ladder verb, for example `workestrate down --context personal`.
-The ladder alternatives (`--all`, `--context <ctx>`, `--config-ref <ref>`,
+separate ladder verb, for example `workestrate down --fleet personal`.
+The ladder alternatives (`--all`, `--fleet <name>`, `--config-ref <ref>`,
 `--everything`) are exclusive selectors, not flags to combine.
 
 | Area | Commands and purpose |
@@ -227,16 +227,16 @@ scripts target Debian/Ubuntu. The introductory workflow is in
 prerequisites. Sizing depends on the workload, image builds, and retained Nix
 store; minimum estimates are not capacity guarantees for a real fleet.
 
-Once the host is provisioned, provision the config with a fleet
-attached, then pair `--config` (WHERE the registry lives) with `--fleet`
+Once the host is provisioned, provision the config and attach a fleet,
+then pair `--config` (WHERE the registry lives) with `--fleet`
 (WHICH registered config to target) on every secrets command:
 
 ```sh
-workestrate config init --fleet <your-fleet-url> --name personal
+workestrate config init
+workestrate fleet add <your-fleet-url> personal
 # Second machine from an existing config:
 # workestrate config clone <src-config-or-git-url> [dest-dir]
 workestrate --config <config-path> fleet list
-workestrate context current
 workestrate validate-config
 workestrate --config <config-path> secrets update --fleet personal
 workestrate secrets init --fleet personal   # first bootstrap only; use update after
@@ -379,23 +379,23 @@ cpus: 1
 memory: 512 MiB
 ```
 
-Then run, observe, and tear down. `down --context` scopes teardown to
-the personal context; it never touches other contexts:
+Then run, observe, and tear down. `down --fleet` scopes teardown to
+the personal fleet's records; it never touches other fleets:
 
 ```sh
 workestrate workload up my-service
 workestrate workload logs my-service
 workestrate workload exec my-agent
-workestrate down --context personal
+workestrate down --fleet personal
 ```
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/layering-dark.svg" />
-  <img src="docs/assets/layering-light.svg" width="1200" alt="Configuration layering: reference config, ordered context layers, user-global overrides, then trusted project and local layers. WORKESTRATE_FLEET_DIR bypasses discovery with a single dev layer." />
+  <img src="docs/assets/layering-light.svg" width="1200" alt="Configuration layering: reference config, ordered fleet layers, user-global overrides, then trusted project and local layers. WORKESTRATE_FLEET_DIR bypasses discovery with a single dev layer." />
 </picture>
 
 Layer order, lowest to highest precedence: reference config, ordered
-context layers, user-global overrides, trusted project and local layers.
+fleet layers, user-global overrides, trusted project and local layers.
 `WORKESTRATE_FLEET_DIR` bypasses discovery with a single dev layer
 (no merge, no trust).
 
@@ -465,26 +465,25 @@ consumer homes are not inputs to the repository verification gate.
 
 ## Flag glossary
 
-The global `--context` spelling and the `down --context` spelling select
-different things. Do not merge them. No flag is renamed by this change.
+The global `--fleet` spelling and the `down --fleet` spelling select
+different things. Do not merge them.
 
 | Flag or variable | Selects | Does not select |
 | :--- | :--- | :--- |
-| `--config <DIR>` | Config root: registry (`config.toml`), overrides, state/store dirs, fleet checkouts. Highest-precedence `WORKESTRATE_CONFIG` step. | Which config layers are active; backend runtime state (`MSB_HOME`); full process isolation (see `AGENTS.md`). |
-| `--context <NAME>` (global) | Active named layer bundle (`[contexts.<name>] layers`), plus the `<ctx>-` slot-prefix namespace. | Which sandbox records `down` stops; the pinned git ref. |
-| `--config-ref <REF>` | Pinned-consumption rung: every git-backed config entry is read at this branch/sha; a branch-shaped ref also feeds context derivation. | A sandbox-record selector (see `down --config-ref`). |
-| `WORKESTRATE_FLEET_DIR` | Explicit single-layer development/testing bypass, resolved before the registry. | The operator path; the first layer of a merged stack. |
-| `down --context <CTX>` | Sandbox records whose record context (primary) or `<ctx>-` slot prefix (corroborating) matches. | The config layer bundle. |
-| `down --config-ref <REF>` | Records whose implied context matches a validated branch-shaped ref; a sha implies nothing and is refused. | The pinned-consumption layer. |
+| `--config <DIR>` | Config root: registry (`config.toml`), overrides, state/store dirs, fleet checkouts. Highest-precedence `WORKESTRATE_CONFIG` step. | Which fleet is active; backend runtime state (`MSB_HOME`); full process isolation (see `AGENTS.md`). |
+| `--fleet <NAME>` (global) | Active registered fleet (`[fleets.<name>]`); the fleet is its own single layer, plus the `<fleet>-` slot-prefix namespace. | Which sandbox records `down` stops; the pinned git ref. |
+| `--config-ref <REF>` | Pinned-consumption rung: every git-backed config entry is read at this branch/sha; a branch-shaped ref also feeds fleet derivation. | A sandbox-record selector (see `down --config-ref`). |
+| `WORKESTRATE_FLEET_DIR` | Explicit single-layer development/testing bypass, resolved before the registry. | The operator path; a fleet or its layer. |
+| `down --fleet <NAME>` | Sandbox records whose record context (primary) or `<name>-` slot prefix (corroborating) matches the fleet. | The active fleet or its layers. |
+| `down --config-ref <REF>` | Records whose implied fleet matches a validated branch-shaped ref; a sha implies nothing and is refused. | The pinned-consumption layer. |
 | `MSB_HOME` | Backend Microsandbox runtime state, separate from the config. Packaged default `~/.microsandbox/current`. | Tool-config registry, overrides, or config checkouts. |
 | `WORKESTRATE_INVOKE_CWD` | The operator's invocation directory, captured once at CLI entry and inherited by re-exec'd or detached children. | A live re-resolution of the current working directory. |
 
 Related names that are not these flags: the `config` subcommand
 (provisioning), `migrate-config` (one-time legacy XDG consolidation),
-`--fleet <name>` (which registered fleet a `secrets` command targets),
-`--fleet-dir <DIR>` (explicit fleet directory target), and the `context`
-subcommand family (`list | current | use <name>`; contexts are otherwise
-hand-edited in the registry TOML).
+the `secrets --fleet <name>` target (which registered fleet's secrets file
+a `secrets` command edits — a local flag shadowing the global selector),
+and `--fleet-dir <DIR>` (explicit fleet directory target).
 
 ## Task-to-source map
 

@@ -217,7 +217,7 @@ impl E2eFixture {
         c.env_remove("CARGO_MANIFEST_DIR");
         c.env_remove("WORKESTRATE_STATE_DIR");
         c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-        c.env_remove("WORKESTRATE_CONTEXT");
+        c.env_remove("WORKESTRATE_FLEET");
         c
     }
 

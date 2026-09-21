@@ -8,7 +8,7 @@ The root README links the hero to the rybskiworks organization.
 | :--- | :--- |
 | `workestrate-{light,dark}.svg` | Project identity and a conceptual control-plane / individual-workload drawing. |
 | `operating-loop-{light,dark}.svg` | Define policy, scope authority, delegate work, validate results. An operating philosophy, not a tested-capability badge. |
-| `layering-{light,dark}.svg` | Configuration layering stack: reference, context layers, user-global, trusted project/local, plus the config-dir bypass. |
+| `layering-{light,dark}.svg` | Configuration layering stack: reference, the active fleet layer, user-global, trusted project/local, plus the config-dir bypass. |
 
 The visual language follows [Sketchbook](https://github.com/rybskiworks/sketchbook):
 lowercase typography, a quiet dot field, thin technical linework, warm light and
