@@ -526,7 +526,7 @@ serves one Unix endpoint for selected, already-running instances. Repeat
 control-state directory must already exist, be canonical, private and owned by
 the invoking operator. Use `--initialize` only for a new desired store; reopening
 never treats a missing or corrupt store as empty. This path does not replace
-`MSB_HOME`, start workloads, change active context or decrypt SSH key material.
+`MSB_HOME`, start workloads, change the active fleet or decrypt SSH key material.
 
 Before its first await, the command captures the active configuration and each
 selected registry/workload association and compiles immutable policy ceilings.

@@ -48,9 +48,9 @@ Dev freshness is opt-in by ref, in two forms:
 
 * **Whole-config override** — `workestrate --config-ref feat-x <verb>`
   resolves every git-backed config entry at that ref (via the archive
-  cache) and *implies the context*: a branch-shaped ref becomes the active
-  context name. A 40-hex sha is legal for consumption but implies no
-  context.
+  cache) and *implies the fleet*: a branch-shaped ref becomes the active
+  fleet name. A 40-hex sha is legal for consumption but implies no
+  fleet.
 * **Per-workload inline override** — `workload up prime:feat-x[@canary]`.
   Grammar `name[:ref][@id]`: `:` = config branch, `@` = instance id. The
   named workload's capsule is read at `<ref>` from its declaring repo's
@@ -123,46 +123,45 @@ working copies. Nothing is checked out unless someone is actively editing
 it (ADR 0032 addendum §Operating model; the archive module's own header:
 "NO worktrees, NO checkouts").
 
-## 6. Context hook status: not shipped
+## 6. Fleet hook status: not shipped
 
 The devshell context hook from the original ADR 0032 implementation order
 is **NOT shipped** (ADR 0032: "subsumed by the CLI's checkout-branch
-context derivation"). What exists instead, exactly: `WORKESTRATE_CONTEXT`
-is read by the context resolver (step (a) of the derivation ladder, next
-section) and by `context current` to classify the resolution source; it
-can be set by hand or exported in a shell. The global `--context <name>`
-flag sets `WORKESTRATE_CONTEXT` at CLI entry, which also propagates it to
-detached children via spawn env inheritance. Checkout-branch derivation
-happens CLI-side inside the invocation — the resolver inspects the first
-layer's checkout branch itself. There is no shell integration to install.
-(The only hooks in the tree are unrelated: the config's pre-commit
-tombi gate and workload pre-start seed hooks.)
+context derivation"). What exists instead, exactly: `WORKESTRATE_FLEET`
+is read by the fleet resolver (step (a) of the derivation ladder, next
+section); it can be set by hand or exported in a shell. The global
+`--fleet <name>` flag sets `WORKESTRATE_FLEET` at CLI entry, which also
+propagates it to detached children via spawn env inheritance.
+Checkout-branch derivation happens CLI-side inside the invocation — the
+resolver inspects the first layer's checkout branch itself. There is no
+shell integration to install. (The only hooks in the tree are unrelated:
+the config's pre-commit tombi gate and workload pre-start seed hooks.)
 
-## 7. Context model quick reference
+## 7. Fleet model quick reference
 
 Derivation order (pinned; first match wins):
 
-1. explicit `--context` / `WORKESTRATE_CONTEXT` — strict semantics: when
-   contexts are defined the name must be one of them (hard error
-   otherwise); a contexts-less config ignores the env var;
-2. `--config-ref <branch>` — a branch-shaped ref becomes the context-name
+1. explicit `--fleet` / `WORKESTRATE_FLEET` — strict semantics: when
+   fleets are registered the name must be one of them (hard error
+   otherwise); a fleets-less config ignores the env var;
+2. `--config-ref <branch>` — a branch-shaped ref becomes the fleet-name
    candidate (a sha implies nothing);
 3. checkout branch of the FIRST layer's checkout;
-4. default resolution — `settings.default_context`, else bare layers when
-   no contexts are defined, else the existing hard error. This final step
+4. default resolution — `settings.default_fleet`, else bare layers when
+   no fleets are registered, else the existing hard error. This final step
    IS the ADR's "> main": main is the stable line, and there is no literal
-   `"main"` context name.
+   `"main"` fleet name.
 
-Context names must match `^[a-z0-9][a-z0-9-]*$` with no trailing hyphen
-(names become `<context>-<workload>` slot prefixes). Enforcement is
-fail-closed at registry load: a registry carrying an invalid context name
+Fleet names must match `^[a-z0-9][a-z0-9-]*$` with no trailing hyphen
+(names become `<fleet>-<workload>` slot prefixes). Enforcement is
+fail-closed at registry load: a registry carrying an invalid fleet name
 fails to load with an error naming the offending key (the `G4` gate in the
 code; ADR 0032 A1 resolution). The lenient dir-resolution load path used
 for early path setup deliberately stays lenient. There is **no automatic
 migration** for homes with pre-existing odd names: the fix is hand-editing
-the registry TOML (contexts are created by hand-editing; there is no
-`context new`). Legacy records with `context: null` are unknown-context
-forever — never migrated, never hard-failed.
+the registry TOML (fleets registered via `fleet add`/`fleet new` are
+validated at registration). Legacy records with `context: null` are
+unknown-context forever — never migrated, never hard-failed.
 
 ## 8. Identity and image tags
 
@@ -236,13 +235,13 @@ compare stamps and honor the disposition.
 Teardown scopes, narrowest to widest:
 
 ```
-instance < workload < context < config-ref < config (--all) < everything
+instance < workload < fleet < config-ref < config (--all) < everything
 ```
 
 The instance/workload rungs stay on
 `workload <name> down [--instance|--all-instances]`. The four sweep rungs
 live on `workestrate down`: exactly ONE selector per invocation —
-`--all`, `--context <ctx>`, `--config-ref <ref>`, or `--everything`.
+`--all`, `--fleet <name>`, `--config-ref <ref>`, or `--everything`.
 Bare selector-less `down` is a usage error naming the ladder; it never
 guesses a scope. Scripted automation migrates as
 `down-all --yes` → `down --all --yes` (`down-all` survives as a hidden
@@ -251,7 +250,7 @@ usage error).
 
 Exact gates, as implemented:
 
-* **Managed rungs** (context/config-ref/config) take the standard single
+* **Managed rungs** (fleet/config-ref/config) take the standard single
   yes-gate: interactive prompt unless `--yes`; a piped `y`/`yes`
   confirms; a declined prompt aborts with exit 1.
 * **`--everything` is DOUBLE-gated.** (a) The flag must appear TWICE —
@@ -262,10 +261,10 @@ Exact gates, as implemented:
   non-interactive stdin WITHOUT `--yes` HARD-REFUSES — there is no
   piped-y escape for this rung.
 * `down --config-ref` validates fail-closed BEFORE any teardown: a 40-hex
-  sha is refused ("a sha does not imply a context"); an unknown ref errors
+  sha is refused ("a sha does not imply a fleet"); an unknown ref errors
   listing the known refs (registry entry refs + lockfile entry refs and
   ref keys).
-* Context scope keys on RECORD context (primary) or the `<ctx>-` slot
+* Fleet scope keys on RECORD context (primary) or the `<fleet>-` slot
   prefix (corroborating only) — never bare-name equality.
 
 Generation coverage (ADR 0037): the `home` (`--all`) and `everything` scopes sweep ALL retained msb state generations under `$HOME/.microsandbox/generations/` (multi-generation down sweeps), not only the `current` generation.
@@ -401,9 +400,9 @@ Every major claim above, mapped to its primary code path
 | Plain-path exception, branch `"local"` | `src/config/loading.rs` — `layer_content_root`; `src/config/registry.rs` — `source_kind` |
 | Profile binary pinning | `scripts/host-provision.sh` (`nix profile install .#workestrate`); `control/agentctl/build.rs` (rev-stamped version) |
 | Slot / instance naming | `src/microsandbox/slots.rs` — `slot_for`, `instance_name` |
-| Context derivation ladder | `src/config/registry.rs` — `resolve_active_context`, `config_ref_branch_candidate`, `checkout_branch_candidate` |
-| Context-name rule + fail-closed load (G4) | `src/config/registry.rs` — `validate_context_name`, `load_registry` |
-| `WORKESTRATE_CONTEXT` read sites | `src/config/registry.rs` (resolver step a); `src/commands/config_cmd.rs` (`context current` source); `src/main.rs` (flag → env) |
+| Fleet derivation ladder | `src/config/registry.rs` — `resolve_active_fleet`, `config_ref_branch_candidate`, `checkout_branch_candidate` |
+| Fleet-name rule + fail-closed load (G4) | `src/config/registry.rs` — `validate_fleet_prefix`, `load_registry` |
+| `WORKESTRATE_FLEET` read sites | `src/config/registry.rs` (resolver step a); `src/main.rs` (flag → env) |
 | Image tags `name:ctx.sha` + current-pointer | `src/images/state.rs` — `PointerRecord`, `pointer_key`; `src/images/gc.rs` — `split_computed_tag` |
 | GC cascade capsule→repo→settings→default(5) | `src/images/gc.rs` — `resolve_keep_last`, `DEFAULT_IMAGE_KEEP_LAST` |
 | Prune-on-load / manual sweep asymmetry | `src/images/build_cmd.rs` — `process_target`; `src/images/gc.rs` — `cmd_images_gc` |

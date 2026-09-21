@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
   <title id="title">Configuration layering</title>
-  <desc id="desc">Reference config, ordered context layers, user-global overrides, then trusted project and local layers. WORKESTRATE_CONFIG_DIR bypasses discovery with a single dev layer. Lowest layer at the bottom, highest precedence at the top.</desc>
+  <desc id="desc">Reference config, the active fleet layer, user-global overrides, then trusted project and local layers. WORKESTRATE_FLEET_DIR bypasses discovery with a single dev layer. Lowest layer at the bottom, highest precedence at the top.</desc>
   <defs>
     <linearGradient id="ink" x1="44" y1="0" x2="1156" y2="0" gradientUnits="userSpaceOnUse">
       <stop stop-color="#255bbd"/><stop offset=".3" stop-color="#b3435d"/><stop offset=".65" stop-color="#b3435d"/><stop offset="1" stop-color="#255bbd"/>
@@ -23,7 +23,7 @@
     <rect x="674" y="142" width="456" height="34" rx="8" fill="#f1f3f6" stroke="#d1d9e2"/>
     <text x="690" y="164">3 - user-global overrides</text>
     <rect x="674" y="184" width="456" height="34" rx="8" fill="#f1f3f6" stroke="#d1d9e2"/>
-    <text x="690" y="206">2 - context layers (ordered)</text>
+    <text x="690" y="206">2 - active fleet layer</text>
     <rect x="674" y="226" width="456" height="34" rx="8" fill="none" stroke="url(#ink)" stroke-width="2"/>
     <text x="690" y="248">1 - reference config</text>
   </g>
@@ -33,7 +33,7 @@
     <text x="46" y="180" font-size="26" fill="#192334">reference to local,</text>
     <text x="46" y="212" font-size="26" fill="#192334">lowest wins last.</text>
   </g>
-  <text x="46" y="258" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379">WORKESTRATE_CONFIG_DIR bypasses discovery</text>
+  <text x="46" y="258" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379">WORKESTRATE_FLEET_DIR bypasses discovery</text>
   <path d="M46 280H420" stroke="#d1d9e2"/>
   <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379">
     <text x="46" y="306">single dev layer</text>
