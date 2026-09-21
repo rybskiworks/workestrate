@@ -153,10 +153,12 @@ enum Commands {
         all: bool,
         /// Fleet scope: every managed target whose record fleet
         /// (primary) or `<fleet>-` slot prefix (corroborating) matches.
+        /// Same selector as the global `--fleet` — either position works.
         #[arg(long, value_name = "FLEET", conflicts_with_all = ["all", "config_ref", "everything"])]
         fleet: Option<String>,
         /// Config-ref scope: a VALIDATED branch-shaped ref; resolves as the
         /// fleet the branch implies (a sha implies nothing and is refused).
+        /// Same selector as the global `--config-ref`.
         #[arg(long, value_name = "REF", conflicts_with_all = ["all", "fleet", "everything"])]
         config_ref: Option<String>,
         /// Everything scope (DOUBLE-GATED): give it TWICE plus the standard
@@ -993,6 +995,17 @@ async fn async_main(args: Vec<String>) -> Result<()> {
                 force,
             } = &action
             {
+                // `--fleet` on build is the SAME selector as the global flag
+                // (one shared clap arg): a value given after the subcommand
+                // never reached the root-level env propagation above, so
+                // bridge it here — `workload build --fleet X` and
+                // `--fleet X workload build` resolve identically.
+                if let Some(fleet) = fleet {
+                    // SAFETY: startup-phase CLI override, set before the
+                    // build flow (or any spawned task) reads the resolver
+                    // env; no concurrent mutation of this key.
+                    unsafe { std::env::set_var("WORKESTRATE_FLEET", fleet) };
+                }
                 return workestrate::images::build_cmd::cmd_workload_build(
                     name.as_deref(),
                     fleet.as_deref(),
@@ -1969,6 +1982,48 @@ mod tests {
         assert!(Cli::try_parse_from(["workestrate", "secrets", "init", "update"]).is_err());
     }
 
+    /// The secrets `--fleet` selector shares its clap arg id with the global
+    /// `--fleet`: a value given BEFORE the subcommand lands in the target
+    /// args as the same selector. A mixed shape (global fleet plus a local
+    /// selector) still parses — clap conflicts do not see propagated
+    /// globals — and is rejected by resolve_target, never silently
+    /// re-targeted.
+    #[test]
+    fn secrets_global_fleet_counts_as_the_fleet_selector() {
+        let cli = Cli::try_parse_from(["workestrate", "--fleet", "work", "secrets", "init"])
+            .expect("global --fleet + bare secrets init must parse");
+        let Commands::Secrets {
+            action: SecretsAction::Init { target },
+        } = cli.command
+        else {
+            panic!("expected secrets init");
+        };
+        assert_eq!(
+            target.fleet.as_deref(),
+            Some("work"),
+            "global --fleet propagates into the secrets target args"
+        );
+        assert!(!target.global && target.fleet_dir.is_none());
+
+        let cli = Cli::try_parse_from([
+            "workestrate",
+            "--fleet",
+            "work",
+            "secrets",
+            "init",
+            "--global",
+        ])
+        .expect("mixed global/local shape parses at the clap layer");
+        let Commands::Secrets {
+            action: SecretsAction::Init { target },
+        } = cli.command
+        else {
+            panic!("expected secrets init");
+        };
+        assert!(target.global);
+        assert_eq!(target.fleet.as_deref(), Some("work"));
+    }
+
     /// The removed top-level `secrets-target`/`secrets-schema` aliases
     /// stay removed: they must fail to parse (use `secrets target/schema`).
     #[test]
@@ -2837,6 +2892,55 @@ mod tests {
         }
     }
 
+    /// The global --fleet/--config-ref share their clap arg ids with the
+    /// down ladder rungs: a value given BEFORE the subcommand lands in the
+    /// down matches as the same selector. A mixed shape (global fleet plus
+    /// a local rung) still parses — clap conflicts do not see propagated
+    /// globals — and is rejected by resolve_cli_scope, never by a panic.
+    #[test]
+    fn root_down_global_fleet_counts_as_the_fleet_rung() {
+        let cli = Cli::try_parse_from(["workestrate", "--fleet", "work", "down"])
+            .expect("global --fleet + bare down must parse");
+        match cli.command {
+            Commands::Down {
+                all,
+                fleet,
+                config_ref,
+                everything,
+                ..
+            } => {
+                assert!(!all && config_ref.is_none() && everything == 0);
+                assert_eq!(
+                    fleet.as_deref(),
+                    Some("work"),
+                    "global --fleet propagates into the down matches as the fleet rung"
+                );
+            }
+            _ => panic!("expected Commands::Down"),
+        }
+        let cli = Cli::try_parse_from(["workestrate", "--fleet", "work", "down", "--all"])
+            .expect("mixed global/local shape parses at the clap layer");
+        match cli.command {
+            Commands::Down { all, fleet, .. } => {
+                assert!(all);
+                assert_eq!(fleet.as_deref(), Some("work"));
+            }
+            _ => panic!("expected Commands::Down"),
+        }
+        let err = workestrate::microsandbox::runtime::down_scope::resolve_cli_scope(
+            true,
+            Some("work"),
+            None,
+            0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("exactly ONE scope selector"),
+            "mixed shape must name the one-selector rule: {err}"
+        );
+    }
+
     /// Bare `down` with NO selector parses at the clap layer but is a USAGE
     /// error naming the ladder (resolve_cli_scope) — it never guesses a
     /// scope. The per-workload `workload down <name>` surface is unchanged.
@@ -3072,19 +3176,13 @@ mod tests {
         }
     }
 
-    /// §5.1 selector conflicts are parse errors: name+--fleet, name+--all-fleets,
-    /// --fleet+--all-fleets.
+    /// §5.1 selector conflicts are parse errors for the shapes that stay
+    /// exclusive: name+--all-fleets, --fleet+--all-fleets. name+--fleet is
+    /// NOT a conflict — `--fleet` is the shared fleet selector and composes
+    /// with a name ("build <name> from that fleet").
     #[test]
     fn workload_build_selector_conflicts_are_rejected() {
         for argv in [
-            vec![
-                "workestrate",
-                "workload",
-                "build",
-                "pi",
-                "--fleet",
-                "personal",
-            ],
             vec!["workestrate", "workload", "build", "pi", "--all-fleets"],
             vec![
                 "workestrate",
@@ -3099,6 +3197,44 @@ mod tests {
                 Cli::try_parse_from(argv.clone()).is_err(),
                 "conflicting selectors must fail to parse: {argv:?}"
             );
+        }
+    }
+
+    /// The build-local and global `--fleet` are ONE shared clap arg: a name
+    /// plus `--fleet` composes in either flag position, and a global
+    /// `--fleet` value is visible in the subcommand's matches (the dispatch
+    /// treats name+fleet as "build <name> from that fleet" — never a
+    /// clap-conflict panic).
+    #[test]
+    fn workload_build_name_and_fleet_compose_in_either_position() {
+        let cli =
+            Cli::try_parse_from(["workestrate", "workload", "build", "pi", "--fleet", "work"])
+                .expect("build <name> --fleet must parse");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Build { name, fleet, .. },
+            } => {
+                assert_eq!(name.as_deref(), Some("pi"));
+                assert_eq!(fleet.as_deref(), Some("work"));
+            }
+            _ => panic!("expected workload build"),
+        }
+        let cli =
+            Cli::try_parse_from(["workestrate", "--fleet", "work", "workload", "build", "pi"])
+                .expect("--fleet ... build <name> must parse");
+        assert_eq!(cli.fleet.as_deref(), Some("work"), "root-level field set");
+        match cli.command {
+            Commands::Workload {
+                action: WorkloadAction::Build { name, fleet, .. },
+            } => {
+                assert_eq!(name.as_deref(), Some("pi"));
+                assert_eq!(
+                    fleet.as_deref(),
+                    Some("work"),
+                    "global --fleet propagates into the subcommand matches"
+                );
+            }
+            _ => panic!("expected workload build"),
         }
     }
 

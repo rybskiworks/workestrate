@@ -492,9 +492,10 @@ pub fn known_config_refs() -> Result<Vec<String>> {
 }
 
 /// Resolve the CLI flags into exactly ONE ladder scope (ADR 0032 addendum
-/// §Down scope ladder). clap `conflicts_with` already enforces one-selector
-/// per invocation; this pure fn is the defensive backstop AND the
-/// no-selector usage error: bare `down` names the ladder instead of
+/// §Down scope ladder). clap `conflicts_with` enforces one-selector for
+/// flags given at the same level, but a global value propagated into these
+/// matches bypasses it — the selector count below is the real backstop, AND
+/// the no-selector usage error: bare `down` names the ladder instead of
 /// guessing a scope.
 pub fn resolve_cli_scope(
     all: bool,
@@ -502,6 +503,24 @@ pub fn resolve_cli_scope(
     config_ref: Option<&str>,
     everything_count: u8,
 ) -> Result<DownScope> {
+    // The global --fleet/--config-ref share their clap arg ids with the
+    // ladder rungs here, so a value given BEFORE the subcommand lands in
+    // these matches too — deliberately: it is the same selector wherever it
+    // appears. But clap's declared conflicts do not see propagated global
+    // values, so mixed selector shapes are rejected by counting, not by
+    // relying on the parse-time conflicts alone.
+    let selector_count = u8::from(all)
+        + u8::from(fleet.is_some())
+        + u8::from(config_ref.is_some())
+        + u8::from(everything_count >= 1);
+    if selector_count > 1 {
+        anyhow::bail!(
+            "`down` takes exactly ONE scope selector — \
+             --all (config) | --fleet <name> | --config-ref <ref> | --everything --everything \
+             (ADR 0032 addendum §Down scope ladder: instance < workload < fleet < config-ref \
+             < config < everything; per-workload down stays on `workload <name> down`)"
+        );
+    }
     if everything_count >= 1 {
         return Ok(DownScope::Everything);
     }
@@ -879,6 +898,30 @@ mod tests {
             .to_string();
         for scope in ["--all", "--fleet", "--config-ref", "--everything"] {
             assert!(err.contains(scope), "error must list {scope}: {err}");
+        }
+    }
+
+    /// Mixed selector shapes are a usage error naming the one-selector rule.
+    /// clap's declared conflicts already reject same-level pairs; this guard
+    /// covers the shapes clap cannot see — a global --fleet/--config-ref
+    /// value propagated into the down matches plus a local rung.
+    #[test]
+    fn resolve_cli_scope_rejects_mixed_selector_shapes() {
+        for (all, fleet, config_ref, everything) in [
+            (true, Some("work"), None, 0),
+            (true, None, Some("feat-x"), 0),
+            (true, None, None, 1),
+            (false, Some("work"), Some("feat-x"), 0),
+            (false, Some("work"), None, 2),
+            (false, None, Some("feat-x"), 1),
+        ] {
+            let err = resolve_cli_scope(all, fleet, config_ref, everything)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("exactly ONE scope selector"),
+                "({all}, {fleet:?}, {config_ref:?}, {everything}) must name the rule: {err}"
+            );
         }
     }
 

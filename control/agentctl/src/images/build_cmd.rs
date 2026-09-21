@@ -769,13 +769,24 @@ pub async fn cmd_workload_build(
     json: bool,
 ) -> Result<()> {
     let scope = match (name, fleet, all_fleets) {
-        (Some(n), None, false) => BuildScope::Name(n),
-        (None, None, false) => BuildScope::ActiveFleet,
+        // A workload name selects single-name mode. `--fleet` then names the
+        // fleet the workload is resolved against — the same shared selector
+        // as the global flag, so `workestrate --fleet X workload build n`
+        // and `workestrate workload build n --fleet X` both mean "build n
+        // from fleet X".
+        (Some(n), _, false) => BuildScope::Name(n),
         (None, Some(r), false) => BuildScope::Fleet(r),
+        (None, None, false) => BuildScope::ActiveFleet,
         (None, None, true) => BuildScope::AllFleets,
-        // clap's conflicts_with declarations make every other shape
-        // unparsable.
-        other => unreachable!("clap conflicts guarantee one selector shape; got {other:?}"),
+        // clap's declared conflicts cover same-level combinations, but a
+        // global --fleet propagated into this subcommand's matches bypasses
+        // them — reject mixed selector shapes explicitly.
+        (Some(n), _, true) => {
+            anyhow::bail!("--all-fleets cannot be combined with a workload name ('{n}')")
+        }
+        (None, Some(r), true) => {
+            anyhow::bail!("--all-fleets cannot be combined with --fleet '{r}'")
+        }
     };
     let single_name = name.is_some();
 
