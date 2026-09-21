@@ -41,7 +41,7 @@ fn render_plan(name: &str) -> Vec<u8> {
         .env("WORKESTRATE_FLEET_DIR", config_reference_dir())
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
         .env_remove("WORKESTRATE_CONFIG")
-        .env_remove("WORKESTRATE_CONTEXT")
+        .env_remove("WORKESTRATE_FLEET")
         .output()
         .unwrap_or_else(|e| panic!("failed to invoke `workestrate workload plan {name}`: {e}"));
     assert!(
@@ -131,7 +131,7 @@ fn golden_parallel_instance_plan_matches_byte_for_byte() {
         .env("WORKESTRATE_STATE_DIR", &state_dir)
         .env_remove("WORKESTRATE_NO_PROJECT_CONFIG")
         .env_remove("WORKESTRATE_CONFIG")
-        .env_remove("WORKESTRATE_CONTEXT")
+        .env_remove("WORKESTRATE_FLEET")
         .output()
         .unwrap_or_else(|e| {
             panic!("failed to invoke `workestrate workload plan example-service --instance canary`: {e}")

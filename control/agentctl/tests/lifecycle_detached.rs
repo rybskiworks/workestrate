@@ -51,7 +51,7 @@ fn isolated_cmd(home: &std::path::Path, msb_home: &std::path::Path) -> Command {
     c.env("XDG_DATA_HOME", home.join(".local").join("share"));
     c.env("XDG_STATE_HOME", home.join(".local").join("state"));
     c.env_remove("WORKESTRATE_NO_PROJECT_CONFIG");
-    c.env_remove("WORKESTRATE_CONTEXT");
+    c.env_remove("WORKESTRATE_FLEET");
     let fixture: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
@@ -200,7 +200,7 @@ async fn detached_up_new_registers_slot_at_slug_and_down_stops_it() {
         .unwrap_or_else(|| panic!("expected '<slot>@<slug>', got '{instance}'"));
     assert_eq!(
         slot, "example-litellm",
-        "slot must be the bare workload name (no context active)"
+        "slot must be the bare workload name (no fleet active)"
     );
     assert!(
         regex_lite_matches(SLUG_RE, slug),

@@ -25,11 +25,11 @@ struct PreparedInstance {
 }
 
 /// Resolve the active configuration and every selected registry association
-/// before any asynchronous operation. There is no context switch, plan reload,
+/// before any asynchronous operation. There is no fleet switch, plan reload,
 /// secret decryption, auto-start or caller-supplied policy ceiling here.
 fn prepare_instances(instances: &[String]) -> Result<Vec<PreparedInstance>> {
     validate_selectors(instances)?;
-    let context = crate::config::active_context_name();
+    let fleet = crate::config::active_fleet_name();
     let state = crate::config::resolve_state_dir();
     let mut native_names = BTreeSet::new();
     let mut prepared = Vec::new();
@@ -38,13 +38,13 @@ fn prepare_instances(instances: &[String]) -> Result<Vec<PreparedInstance>> {
             .context("selected instance has no readable registry record")?;
         ensure!(
             record.instance == *instance
-                && record.context == context
+                && record.context == fleet
                 && slots::context_consistent_with_instance(
                     instance,
                     &record.workload,
-                    context.as_deref()
+                    fleet.as_deref()
                 ),
-            "selected instance does not belong to the active workload context"
+            "selected instance does not belong to the active workload fleet"
         );
         let id = slots::instance_id_of(instance);
         if let Some(id) = id {
@@ -65,7 +65,7 @@ fn prepare_instances(instances: &[String]) -> Result<Vec<PreparedInstance>> {
         prepared.push(PreparedInstance {
             reference: InstanceRef {
                 workload: WorkloadRef {
-                    context: context.clone(),
+                    context: fleet.clone(),
                     name: record.workload,
                 },
                 instance: instance.clone(),
@@ -80,8 +80,8 @@ fn prepare_instances(instances: &[String]) -> Result<Vec<PreparedInstance>> {
         });
     }
     ensure!(
-        crate::config::active_context_name() == context,
-        "active context changed while preparing control plans"
+        crate::config::active_fleet_name() == fleet,
+        "active fleet changed while preparing control plans"
     );
     Ok(prepared)
 }

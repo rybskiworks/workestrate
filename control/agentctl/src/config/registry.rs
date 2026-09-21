@@ -1,17 +1,17 @@
-//! Registry persistence and active-context resolution.
+//! Registry persistence and active-fleet resolution.
 
 use anyhow::Result;
 
 use crate::config::paths::registry_path;
-use crate::config::{ActiveContext, FleetEntry, Registry};
+use crate::config::{ActiveFleet, FleetEntry, Registry};
 
 /// Load the config registry (`registry.toml` at [`registry_path`]).
 /// Returns `Ok(None)` when the file does not exist (normal first-run state);
 /// read/parse failures are hard errors.
 ///
-/// G4 (fail-closed): every `[contexts.<name>]` key is validated with
-/// [`validate_context_name`] after deserialize — a registry carrying an
-/// invalid context name fails to load rather than silently admitting a name
+/// G4 (fail-closed): every `[fleets.<name>]` key is validated with
+/// [`validate_fleet_prefix`] after deserialize — a registry carrying an
+/// invalid fleet name fails to load rather than silently admitting a name
 /// that would produce malformed sandbox instance prefixes. (The lenient
 /// `load_registry_for_dir_resolution` in config/paths.rs deliberately
 /// swallows this error for early path resolution.)
@@ -24,24 +24,25 @@ pub fn load_registry() -> Result<Option<Registry>> {
         .map_err(|e| anyhow::anyhow!("failed to read registry {}: {}", path.display(), e))?;
     let registry: Registry = toml::from_str(&content)
         .map_err(|e| anyhow::anyhow!("failed to parse registry {}: {}", path.display(), e))?;
-    for name in registry.contexts.keys() {
-        validate_context_name(name)?;
+    for name in registry.fleets.keys() {
+        validate_fleet_prefix(name)?;
     }
     Ok(Some(registry))
 }
 
-/// Validate a context name (G4). Context names become sandbox instance name
-/// prefixes (`<context>-<workload>`), so they must be safe instance-name
-/// components: `^[a-z0-9][a-z0-9-]*$` — lowercase alphanumerics and hyphens,
-/// starting alphanumeric — plus no trailing hyphen (a trailing `-` would
-/// double the `<context>-<workload>` separator). Unlike
+/// Validate a fleet name as an instance-name prefix (G4). The active fleet's
+/// name becomes a sandbox instance name prefix (`<fleet>-<workload>`), so it
+/// must be a safe instance-name component: `^[a-z0-9][a-z0-9-]*$` — lowercase
+/// alphanumerics and hyphens, starting alphanumeric — plus no trailing hyphen
+/// (a trailing `-` would double the `<fleet>-<workload>` separator). Unlike
 /// [`crate::microsandbox::slots::validate_instance_id`] there is NO length
 /// cap and NO reserved-word/numeric rule.
 ///
-/// Contexts are created by hand-editing the registry TOML (there is no
-/// `context new` command), so the load-time gate in [`load_registry`] is the
-/// single enforcement point; this function is its pure core.
-pub fn validate_context_name(name: &str) -> Result<()> {
+/// Fleets are registered by `fleet add`/`fleet new` (which apply the broader
+/// [`crate::config::validate_fleet_name`]) or by hand-editing the registry
+/// TOML, so the load-time gate in [`load_registry`] is the single
+/// enforcement point for the prefix rule; this function is its pure core.
+pub fn validate_fleet_prefix(name: &str) -> Result<()> {
     let valid = !name.is_empty()
         && !name.ends_with('-')
         && name.chars().enumerate().all(|(i, c)| {
@@ -53,9 +54,9 @@ pub fn validate_context_name(name: &str) -> Result<()> {
         });
     if !valid {
         anyhow::bail!(
-            "invalid context name '{}': must match ^[a-z0-9][a-z0-9-]*$ (lowercase alphanumerics \
-             and hyphens, starting alphanumeric) — context names become sandbox instance name \
-             prefixes",
+            "invalid fleet name '{}': must match ^[a-z0-9][a-z0-9-]*$ (lowercase alphanumerics \
+             and hyphens, starting alphanumeric, no trailing hyphen) — the active fleet's name \
+             becomes a sandbox instance name prefix",
             name
         );
     }
@@ -334,6 +335,8 @@ pub fn effective_ref(name: &str, entry: &FleetEntry, checkout: &std::path::Path)
 
 /// Insert/replace a fleet entry in the registry. If `layers` is empty,
 /// push `name` as the default layer (mirrors cmd_fleet_add's behavior).
+/// When no `default_fleet` is set, the newly registered fleet becomes the
+/// default so a freshly provisioned fleet is active immediately.
 /// Shared by `cmd_fleet_add` (clone + register) and `cmd_fleet_new`
 /// (local path + register). For local-path scaffolds, pass `git_ref = None`
 /// and `rev = None` — `cmd_fleet_update` recognizes this as a local-path
@@ -360,58 +363,34 @@ pub fn register_fleet(
         if registry.layers.is_empty() {
             registry.layers.push(name.to_string());
         }
+        if registry.settings.default_fleet.is_none() {
+            registry.settings.default_fleet = Some(name.to_string());
+        }
         Ok(())
     })
 }
 
-/// Persist `settings.default_context = name` in the registry. Errors if no
-/// registry exists or if `name` is not a defined context (the message lists
-/// the available contexts). The load → mutate → save critical section runs
-/// under the advisory registry lock (FN-5), same as [`register_fleet`].
-pub fn set_default_context(name: &str) -> Result<()> {
-    let _lock = RegistryLock::acquire()?;
-    let mut registry = load_registry()?
-        .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
-    if !registry.contexts.contains_key(name) {
-        let mut available: Vec<String> = registry.contexts.keys().cloned().collect();
-        available.sort();
-        let available = if available.is_empty() {
-            "(none defined)".to_string()
-        } else {
-            available.join(", ")
-        };
-        anyhow::bail!(
-            "context '{}' is not defined; available contexts: {}",
-            name,
-            available
-        );
-    }
-    registry.settings.default_context = Some(name.to_string());
-    save_registry(&registry)?;
-    Ok(())
-}
-
-/// Slugify a ladder-derived context-name candidate (rungs b/c of the A5
-/// derivation order) into the context-name charset `^[a-z0-9][a-z0-9-]*$`
-/// ([`validate_context_name`]): lowercase ASCII, every maximal run of
+/// Slugify a ladder-derived fleet-name candidate (rungs b/c of the A5
+/// derivation order) into the fleet-name charset `^[a-z0-9][a-z0-9-]*$`
+/// ([`validate_fleet_prefix`]): lowercase ASCII, every maximal run of
 /// characters outside `[a-z0-9]` mapped to a single `-`, leading/trailing
 /// `-` trimmed. Returns None when nothing usable remains (e.g. `"###"`) —
 /// the derivation ladder simply falls through as if no candidate existed.
 ///
 /// Slugifying AT DERIVATION (rather than validate-and-skip) keeps the
 /// common `feature/x` case working: `migration/tool-model` rides as
-/// `migration-tool-model`, `feat/Foo#1.2` as `feat-foo-1-2`. Context names
+/// `migration-tool-model`, `feat/Foo#1.2` as `feat-foo-1-2`. Fleet names
 /// become sandbox instance-name prefixes and image-tag segments, so a raw
-/// branch name is never a legal context name as-is. Collisions between
-/// distinct branches slugging equal are accepted: the context name is
+/// branch name is never a legal fleet name as-is. Collisions between
+/// distinct branches slugging equal are accepted: the fleet name is
 /// identity-only in lenient mode; records are the identity authority (ADR
 /// 0032 addendum §Selection ladder, note 2026-08-28).
 ///
 /// Also reused by `crate::images::state::image_tag_context` to slugify the
 /// armed inline-override ref into the image-tag ctx segment — the SAME slug
-/// as the context candidate for the same branch, so tag ctx and context
+/// as the fleet candidate for the same branch, so tag ctx and fleet
 /// name stay consistent for a given ref.
-pub(crate) fn slugify_context_candidate(raw: &str) -> Option<String> {
+pub(crate) fn slugify_fleet_candidate(raw: &str) -> Option<String> {
     let mut out = String::with_capacity(raw.len());
     let mut pending_dash = false;
     for c in raw.chars() {
@@ -439,12 +418,12 @@ pub(crate) fn slugify_context_candidate(raw: &str) -> Option<String> {
     Some(out)
 }
 
-/// Step (b) of the A5 derivation order (see [`resolve_active_context`]):
+/// Step (b) of the A5 derivation order (see [`resolve_active_fleet`]):
 /// when `WORKESTRATE_CONFIG_REF` (`--config-ref`) names a BRANCH —
 /// `refs/heads/<ref>` or `refs/remotes/origin/<ref>` present in ANY
 /// Remote/GitFile entry's managed clone (first match wins) — the ref is
-/// the context-name candidate, SLUGIFIED by
-/// [`slugify_context_candidate`] (a candidate with no usable characters
+/// the fleet-name candidate, SLUGIFIED by
+/// [`slugify_fleet_candidate`] (a candidate with no usable characters
 /// yields no candidate, and the ladder falls through). A purely-sha ref
 /// yields None (shas are not branches). Probe failures (missing clone, git
 /// error) read as non-matches: consumption is the fail-closed layer
@@ -465,18 +444,18 @@ fn config_ref_branch_candidate(registry: &Registry) -> Option<String> {
             continue;
         }
         if crate::git::git_branch_ref_exists(&clone, &config_ref).unwrap_or(false) {
-            return slugify_context_candidate(&config_ref);
+            return slugify_fleet_candidate(&config_ref);
         }
     }
     None
 }
 
-/// Step (c) of the A5 derivation order (see [`resolve_active_context`]):
+/// Step (c) of the A5 derivation order (see [`resolve_active_fleet`]):
 /// the FIRST layer's checkout branch — [`local_entry_checkout_dir`] for
 /// PlainPath entries, else the managed clone — when that dir is a git repo
 /// on a branch ([`crate::git::git_checkout_branch`]; detached HEAD and
-/// non-repos yield None). The branch name is the context-name candidate,
-/// SLUGIFIED by [`slugify_context_candidate`] (a candidate with no usable
+/// non-repos yield None). The branch name is the fleet-name candidate,
+/// SLUGIFIED by [`slugify_fleet_candidate`] (a candidate with no usable
 /// characters yields no candidate, and the ladder falls through).
 fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
     let first = registry.layers.first()?;
@@ -495,83 +474,83 @@ fn checkout_branch_candidate(registry: &Registry) -> Option<String> {
     crate::git::git_checkout_branch(&dir)
         .ok()
         .flatten()
-        .and_then(|branch| slugify_context_candidate(&branch))
+        .and_then(|branch| slugify_fleet_candidate(&branch))
 }
 
-/// Resolve the active context.
+/// Resolve the active fleet.
 ///
 /// A5 derivation order (ADR 0032 addendum 2026-08-24 §Selection ladder;
 /// order PINNED 2026-08-24):
 ///
-/// a. `WORKESTRATE_CONTEXT` env (set by `--context` or by hand) —
-///    UNCHANGED strict semantics: when contexts are defined the name MUST
-///    be one of them (hard error otherwise); a contexts-less config ignores
+/// a. `WORKESTRATE_FLEET` env (set by `--fleet` or by hand) —
+///    UNCHANGED strict semantics: when fleets are registered the name MUST
+///    be one of them (hard error otherwise); a fleets-less config ignores
 ///    the env and keeps the bare-layers shape (`name = None`), as before.
 /// b. `WORKESTRATE_CONFIG_REF` (`--config-ref`) when it names a BRANCH —
 ///    see [`config_ref_branch_candidate`]. A purely-sha ref yields NO
-///    context here.
+///    fleet here.
 /// c. Checkout branch: the FIRST layer's checkout — see
 ///    [`checkout_branch_candidate`].
-/// d. Otherwise today's behavior: `[settings] default_context` / bare
-///    `layers` when no contexts are defined / the existing hard error. The
+/// d. Otherwise today's behavior: `[settings] default_fleet` / bare
+///    `layers` when no fleets are registered / the existing hard error. The
 ///    ADR's "> main" final step IS this default resolution (main = the
-///    stable line) — there is NO literal "main" context name.
+///    stable line) — there is NO literal "main" fleet name.
 ///
 /// Candidate-name resolution for steps b/c (the name did NOT come from an
-/// explicit `--context`): the raw candidate (a branch name) is SLUGIFIED
-/// at derivation by [`slugify_context_candidate`] into the context-name
-/// charset `^[a-z0-9][a-z0-9-]*$` (2026-08-28: context names become
+/// explicit `--fleet`): the raw candidate (a branch name) is SLUGIFIED
+/// at derivation by [`slugify_fleet_candidate`] into the fleet-name
+/// charset `^[a-z0-9][a-z0-9-]*$` (2026-08-28: fleet names become
 /// sandbox instance-name prefixes and image-tag segments, so raw branch
 /// names like `migration/tool-model` are never legal as-is); a candidate
 /// that slugifies to nothing yields NO candidate (the ladder falls
-/// through to step d). The defined-context lookup below uses the SLUG —
-/// a context named `migration-tool-model` matches a checkout of
-/// `migration/tool-model`. When `registry.contexts` CONTAINS the
-/// candidate, its layers are used; ELSE the candidate rides LENIENTLY as
-/// the context
+/// through to step d). The registered-fleet lookup below uses the SLUG —
+/// a fleet named `migration-tool-model` matches a checkout of
+/// `migration/tool-model`. When `registry.fleets` CONTAINS the
+/// candidate, that fleet's single layer is used; ELSE the candidate rides
+/// LENIENTLY as the fleet
 /// NAME (slot prefixing, instance identity) while the LAYER LIST falls
-/// back to `default_context`'s layers, else the bare `layers`. When
-/// contexts ARE defined AND the candidate is undefined AND no
-/// `default_context` exists, the existing hard error stands. Bare-layers
-/// homes (no `[contexts]`) keep `name = None` UNLESS a candidate arose
+/// back to `default_fleet`'s single layer, else the bare `layers`. When
+/// fleets ARE registered AND the candidate is unregistered AND no
+/// `default_fleet` exists, the existing hard error stands. Bare-layers
+/// homes (no `[fleets]`) keep `name = None` UNLESS a candidate arose
 /// from step b/c — then `name = Some(candidate)` over the bare layers
 /// (the dev-model namespacing).
-pub fn resolve_active_context() -> Result<ActiveContext> {
+///
+/// A resolved named fleet maps to a SINGLE-ELEMENT layer set (the fleet IS
+/// its own layer); the merge machinery downstream is unchanged.
+pub fn resolve_active_fleet() -> Result<ActiveFleet> {
     let registry = match load_registry()? {
         Some(r) => r,
         None => {
-            return Ok(ActiveContext {
+            return Ok(ActiveFleet {
                 name: None,
                 layers: vec![],
             });
         }
     };
     let available = || {
-        registry
-            .contexts
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ")
+        let mut names: Vec<String> = registry.fleets.keys().cloned().collect();
+        names.sort();
+        names.join(", ")
     };
 
-    // (a) WORKESTRATE_CONTEXT env (set by --context flag or by user) —
-    //     unchanged strict semantics; a contexts-less config ignores it.
-    if let Ok(name) = std::env::var("WORKESTRATE_CONTEXT") {
-        if registry.contexts.is_empty() {
-            return Ok(ActiveContext {
+    // (a) WORKESTRATE_FLEET env (set by --fleet flag or by user) —
+    //     unchanged strict semantics; a fleets-less config ignores it.
+    if let Ok(name) = std::env::var("WORKESTRATE_FLEET") {
+        if registry.fleets.is_empty() {
+            return Ok(ActiveFleet {
                 name: None,
                 layers: registry.layers,
             });
         }
-        if let Some(ctx) = registry.contexts.get(&name) {
-            return Ok(ActiveContext {
-                name: Some(name),
-                layers: ctx.layers.clone(),
+        if registry.fleets.contains_key(&name) {
+            return Ok(ActiveFleet {
+                name: Some(name.clone()),
+                layers: vec![name],
             });
         }
         anyhow::bail!(
-            "context '{}' not found in registry; available contexts: {}",
+            "fleet '{}' not found in registry; available fleets: {}",
             name,
             available()
         );
@@ -582,72 +561,68 @@ pub fn resolve_active_context() -> Result<ActiveContext> {
     if let Some(candidate) =
         config_ref_branch_candidate(&registry).or_else(|| checkout_branch_candidate(&registry))
     {
-        // A DEFINED context of that name: its layers.
-        if let Some(ctx) = registry.contexts.get(&candidate) {
-            return Ok(ActiveContext {
-                name: Some(candidate),
-                layers: ctx.layers.clone(),
+        // A REGISTERED fleet of that name: its single layer.
+        if registry.fleets.contains_key(&candidate) {
+            return Ok(ActiveFleet {
+                name: Some(candidate.clone()),
+                layers: vec![candidate],
             });
         }
-        // Lenient identity-only mode: the candidate rides as the context
-        // NAME over default_context's layers, else the bare layers.
-        if let Some(ref default) = registry.settings.default_context {
-            match registry.contexts.get(default) {
-                Some(ctx) => {
-                    return Ok(ActiveContext {
-                        name: Some(candidate),
-                        layers: ctx.layers.clone(),
-                    });
-                }
-                None => {
-                    anyhow::bail!(
-                        "default_context '{}' not found in registry contexts; available: {}",
-                        default,
-                        available()
-                    );
-                }
+        // Lenient identity-only mode: the candidate rides as the fleet
+        // NAME over default_fleet's layer, else the bare layers.
+        if let Some(ref default) = registry.settings.default_fleet {
+            if registry.fleets.contains_key(default) {
+                return Ok(ActiveFleet {
+                    name: Some(candidate),
+                    layers: vec![default.clone()],
+                });
             }
+            anyhow::bail!(
+                "default_fleet '{}' not found in registry fleets; available: {}",
+                default,
+                available()
+            );
         }
-        if registry.contexts.is_empty() {
-            return Ok(ActiveContext {
+        if registry.fleets.is_empty() {
+            return Ok(ActiveFleet {
                 name: Some(candidate),
                 layers: registry.layers,
             });
         }
-        // Contexts defined, candidate undefined, no default: the existing
-        // hard error stands.
+        // Fleets registered, candidate unregistered, no default: the
+        // existing hard error stands.
         anyhow::bail!(
-            "contexts are defined but no default_context is set; use --context <name> or set WORKESTRATE_CONTEXT env. Available contexts: {}",
+            "fleets are registered but no default_fleet is set; use --fleet <name> or set WORKESTRATE_FLEET env. Available fleets: {}",
             available()
         );
     }
 
-    // (d) today's behavior, unchanged: bare layers when no contexts are
-    //     defined (backward compat), else default_context, else the hard
+    // (d) today's behavior, unchanged: bare layers when no fleets are
+    //     registered (backward compat), else default_fleet, else the hard
     //     error.
-    if registry.contexts.is_empty() {
-        return Ok(ActiveContext {
+    if registry.fleets.is_empty() {
+        return Ok(ActiveFleet {
             name: None,
             layers: registry.layers,
         });
     }
-    if let Some(ref default) = registry.settings.default_context {
-        if let Some(ctx) = registry.contexts.get(default) {
-            return Ok(ActiveContext {
+    if let Some(ref default) = registry.settings.default_fleet {
+        if registry.fleets.contains_key(default) {
+            return Ok(ActiveFleet {
                 name: Some(default.clone()),
-                layers: ctx.layers.clone(),
+                layers: vec![default.clone()],
             });
         }
         anyhow::bail!(
-            "default_context '{}' not found in registry contexts; available: {}",
+            "default_fleet '{}' not found in registry fleets; available: {}",
             default,
             available()
         );
     }
 
-    // Contexts exist but no env/candidate/default → error
+    // Fleets registered but no env/candidate/default → error
     anyhow::bail!(
-        "contexts are defined but no default_context is set; use --context <name> or set WORKESTRATE_CONTEXT env. Available contexts: {}",
+        "fleets are registered but no default_fleet is set; use --fleet <name> or set WORKESTRATE_FLEET env. Available fleets: {}",
         available()
     );
 }
@@ -664,431 +639,185 @@ pub(crate) mod tests {
     use super::*;
     use crate::config::test_support::*;
 
+    // ---- Active-fleet resolution: the registry-driven ladder ----
+
+    /// Seed a registry with `personal` + `work` fleets (default_fleet:
+    /// `personal`) in the pinned config and return the config dir. Caller must
+    /// hold ENV_TEST_LOCK + an EnvGuard for the ladder env keys.
+    fn seed_two_fleet_home(label: &str) -> std::path::PathBuf {
+        let config_dir = a5_derive_config(label);
+        let mut registry = Registry::default();
+        registry.settings.default_fleet = Some("personal".to_string());
+        for name in ["personal", "work"] {
+            registry.fleets.insert(
+                name.to_string(),
+                FleetEntry {
+                    url: format!("https://example.invalid/{name}.git"),
+                    r#ref: Some("main".to_string()),
+                    rev: None,
+                    secrets: None,
+                    secrets_file: None,
+                    age_key_file: None,
+                    image_keep_last: None,
+                },
+            );
+        }
+        save_registry(&registry).expect("seed registry");
+        config_dir
+    }
+
     #[test]
-    fn resolve_active_context_no_registry_uses_empty_layers() -> Result<()> {
+    fn resolve_active_fleet_no_registry_uses_empty_layers() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-no-reg-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&tmp_home)?;
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = a5_derive_config("fleet-no-reg");
+        // No registry written at all.
 
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+        let fleet = resolve_active_fleet()?;
 
-        let ctx = resolve_active_context()?;
-
-        // Restore
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        assert_eq!(ctx.name, None);
-        assert!(ctx.layers.is_empty());
+        assert_eq!(fleet.name, None);
+        assert!(fleet.layers.is_empty());
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn resolve_active_context_no_contexts_uses_bare_layers() -> Result<()> {
+    fn resolve_active_fleet_no_fleets_uses_bare_layers() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-bare-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let config_dir = tmp_home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&config_dir)?;
-        // Registry with bare layers, no contexts
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = a5_derive_config("fleet-bare");
+        // Registry with bare layers, no fleets.
         std::fs::write(
             config_dir.join("config.toml"),
-            "layers = [\"work\", \"personal\"]\n\n[settings]\ndefault_context = \"personal\"\n",
+            "layers = [\"work\", \"personal\"]\n",
         )?;
 
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
+        let fleet = resolve_active_fleet()?;
 
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
-
-        let ctx = resolve_active_context()?;
-
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        // No contexts defined → bare layers, name is None (backward compat)
-        assert_eq!(ctx.name, None);
-        assert_eq!(ctx.layers, vec!["work", "personal"]);
+        // No fleets registered → bare layers, name is None (backward compat).
+        assert_eq!(fleet.name, None);
+        assert_eq!(fleet.layers, vec!["work", "personal"]);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn resolve_active_context_env_overrides_default() -> Result<()> {
+    fn resolve_active_fleet_env_ignored_when_no_fleets_registered() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-env-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let config_dir = tmp_home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&config_dir)?;
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = a5_derive_config("fleet-env-ignored");
         std::fs::write(
             config_dir.join("config.toml"),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.work]\nlayers = [\"team\", \"personal\"]\n",
+            "layers = [\"work\", \"personal\"]\n",
         )?;
-
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
-
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET", "work") };
 
-        let ctx = resolve_active_context()?;
+        let fleet = resolve_active_fleet()?;
 
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        assert_eq!(ctx.name.as_deref(), Some("work"));
-        assert_eq!(ctx.layers, vec!["team", "personal"]);
+        // A fleets-less config ignores the env (unchanged strict semantics).
+        assert_eq!(fleet.name, None);
+        assert_eq!(fleet.layers, vec!["work", "personal"]);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn resolve_active_context_default_when_no_env() -> Result<()> {
+    fn resolve_active_fleet_env_overrides_default() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-default-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let config_dir = tmp_home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&config_dir)?;
-        std::fs::write(
-            config_dir.join("config.toml"),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.work]\nlayers = [\"team\", \"personal\"]\n",
-        )?;
-
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
-
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = seed_two_fleet_home("fleet-env");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET", "work") };
 
-        let ctx = resolve_active_context()?;
+        let fleet = resolve_active_fleet()?;
 
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        assert_eq!(ctx.name.as_deref(), Some("personal"));
-        assert_eq!(ctx.layers, vec!["personal"]);
+        assert_eq!(fleet.name.as_deref(), Some("work"));
+        assert_eq!(fleet.layers, vec!["work"]);
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn resolve_active_context_unknown_env_errors() -> Result<()> {
+    fn resolve_active_fleet_default_when_no_env() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-unknown-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let config_dir = tmp_home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&config_dir)?;
-        std::fs::write(
-            config_dir.join("config.toml"),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n",
-        )?;
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = seed_two_fleet_home("fleet-default");
 
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
+        let fleet = resolve_active_fleet()?;
 
+        assert_eq!(fleet.name.as_deref(), Some("personal"));
+        assert_eq!(fleet.layers, vec!["personal"]);
+        let _ = std::fs::remove_dir_all(&config_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_active_fleet_unknown_env_errors() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = seed_two_fleet_home("fleet-unknown-env");
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "nonexistent") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET", "nonexistent") };
 
-        let result = resolve_active_context();
+        let err = resolve_active_fleet().expect_err("an unknown fleet must error");
 
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let msg = err.to_string();
         assert!(
-            err.contains("not found"),
-            "error should mention 'not found': {err}"
+            msg.contains("not found"),
+            "error should mention 'not found': {msg}"
         );
+        assert!(
+            msg.contains("personal") && msg.contains("work"),
+            "error should list the available fleets: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     #[test]
-    fn resolve_active_context_contexts_but_no_default_no_env_errors() -> Result<()> {
+    fn resolve_active_fleet_fleets_but_no_default_no_env_errors() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let tmp_home = std::env::temp_dir().join(format!(
-            "workestrate-ctx-nodflt-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let config_dir = tmp_home.join(".config").join("workestrate");
-        std::fs::create_dir_all(&config_dir)?;
-        // Contexts defined but no default_context and no env
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = a5_derive_config("fleet-nodflt");
+        // Fleets registered but no default_fleet and no env.
         std::fs::write(
             config_dir.join("config.toml"),
-            "[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.work]\nlayers = [\"team\"]\n",
+            "[fleets.personal]\nurl = \"https://example.invalid/personal.git\"\n\n[fleets.work]\nurl = \"https://example.invalid/work.git\"\n",
         )?;
 
-        let old_home = std::env::var("HOME").ok();
-        let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
+        let err = resolve_active_fleet().expect_err("no default_fleet must error");
 
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("HOME", &tmp_home) };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                tmp_home.join(".config").to_string_lossy().as_ref(),
-            )
-        };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
-
-        let result = resolve_active_context();
-
-        match old_home {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-        match old_xdg {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
-        }
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        match old_config_dir {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_FLEET_DIR", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") },
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let msg = err.to_string();
         assert!(
-            err.contains("default_context") || err.contains("--context"),
-            "error should mention default_context or --context: {err}"
+            msg.contains("default_fleet") || msg.contains("--fleet"),
+            "error should mention default_fleet or --fleet: {msg}"
         );
+        let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
+
+    #[test]
+    fn resolve_active_fleet_unregistered_default_errors() -> Result<()> {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = a5_derive_config("fleet-ghost-default");
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[settings]\ndefault_fleet = \"ghost\"\n\n[fleets.personal]\nurl = \"https://example.invalid/personal.git\"\n",
+        )?;
+
+        let err = resolve_active_fleet().expect_err("an unregistered default_fleet must error");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("default_fleet 'ghost' not found"),
+            "error must name the unregistered default_fleet: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&config_dir);
+        Ok(())
+    }
+
     // ---- FS-18: local-path vs git-URL registry entry classification ----
 
     fn entry(url: &str, git_ref: Option<&str>, rev: Option<&str>) -> FleetEntry {
@@ -1322,131 +1051,24 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    // ---- W6a: set_default_context (`workestrate context use`) ----
-
-    /// Seed a registry with `personal` + `work` contexts (default:
-    /// `personal`) in the pinned config and return the config dir. Caller must
-    /// hold ENV_TEST_LOCK + an EnvGuard for CONFIG_ENV_KEYS.
-    fn seed_two_context_home(label: &str) -> std::path::PathBuf {
-        let config_dir = pin_config(label);
-        let mut registry = Registry::default();
-        registry.settings.default_context = Some("personal".to_string());
-        registry.contexts.insert(
-            "personal".to_string(),
-            crate::config::Context {
-                layers: vec!["personal".to_string()],
-            },
-        );
-        registry.contexts.insert(
-            "work".to_string(),
-            crate::config::Context {
-                layers: vec!["team".to_string(), "personal".to_string()],
-            },
-        );
-        save_registry(&registry).expect("seed registry");
-        config_dir
-    }
+    // ---- G4: fleet-name validation (fail-closed at registry load) ----
 
     #[test]
-    fn set_default_context_persists() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = seed_two_context_home("w6a-use-persist");
-
-        set_default_context("work")?;
-
-        let registry = load_registry()?.expect("registry must exist");
-        assert_eq!(
-            registry.settings.default_context.as_deref(),
-            Some("work"),
-            "settings.default_context must persist as \"work\""
-        );
-        let _ = std::fs::remove_dir_all(&config_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn set_default_context_then_resolves_as_active_default() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = seed_two_context_home("w6a-use-resolve");
-        // No env override may shadow the persisted default.
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
-
-        set_default_context("work")?;
-        let active = resolve_active_context()?;
-
-        match old_ctx {
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            Some(v) => unsafe { std::env::set_var("WORKESTRATE_CONTEXT", v) },
-            // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-            None => unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") },
-        }
-        let _ = std::fs::remove_dir_all(&config_dir);
-
-        assert_eq!(active.name.as_deref(), Some("work"));
-        assert_eq!(active.layers, vec!["team", "personal"]);
-        Ok(())
-    }
-
-    #[test]
-    fn set_default_context_unknown_name_errors_and_lists_available() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = seed_two_context_home("w6a-use-unknown");
-
-        let result = set_default_context("nonexistent");
-
-        let _ = std::fs::remove_dir_all(&config_dir);
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("not defined"),
-            "error must state the context is not defined: {err}"
-        );
-        assert!(
-            err.contains("personal") && err.contains("work"),
-            "error must list the available contexts: {err}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn set_default_context_without_registry_errors() -> Result<()> {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = pin_config("w6a-use-noreg");
-
-        let result = set_default_context("work");
-
-        let _ = std::fs::remove_dir_all(&config_dir);
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("no registry found"),
-            "error must state no registry exists: {err}"
-        );
-        Ok(())
-    }
-
-    // ---- G4: context-name validation (fail-closed at registry load) ----
-
-    #[test]
-    fn validate_context_name_accepts_valid_names() {
+    fn validate_fleet_prefix_accepts_valid_names() {
         for ok in ["personal", "work-2", "a", "0", "a-b-c", "team2"] {
-            validate_context_name(ok)
-                .unwrap_or_else(|e| panic!("legitimate context '{ok}' rejected: {e}"));
+            validate_fleet_prefix(ok)
+                .unwrap_or_else(|e| panic!("legitimate fleet '{ok}' rejected: {e}"));
         }
     }
 
     #[test]
-    fn validate_context_name_rejects_invalid_names_and_names_them() {
+    fn validate_fleet_prefix_rejects_invalid_names_and_names_them() {
         for bad in ["has space", "has@at", "Upper", "-leading", "trailing-", ""] {
-            let err = validate_context_name(bad).unwrap_err();
+            let err = validate_fleet_prefix(bad).unwrap_err();
             let msg = err.to_string();
             assert!(
                 msg.contains(&format!("'{bad}'")),
-                "error must name the offending context '{bad}': {msg}"
+                "error must name the offending fleet '{bad}': {msg}"
             );
             assert!(
                 msg.contains("^[a-z0-9][a-z0-9-]*$"),
@@ -1455,43 +1077,43 @@ pub(crate) mod tests {
         }
     }
 
-    /// A registry TOML carrying a bad `[contexts.<name>]` key must FAIL
-    /// `load_registry` (fail-closed; G4), naming the offending context.
+    /// A registry TOML carrying a bad `[fleets.<name>]` key must FAIL
+    /// `load_registry` (fail-closed; G4), naming the offending fleet.
     #[test]
-    fn load_registry_rejects_invalid_context_key() -> Result<()> {
+    fn load_registry_rejects_invalid_fleet_key() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = pin_config("g4-bad-context");
+        let config_dir = pin_config("g4-bad-fleet");
         std::fs::write(
             registry_path(),
-            "[settings]\ndefault_context = \"personal\"\n\n[contexts.personal]\nlayers = [\"personal\"]\n\n[contexts.\"has space\"]\nlayers = [\"team\"]\n",
+            "[settings]\ndefault_fleet = \"personal\"\n\n[fleets.personal]\nurl = \"https://example.invalid/personal.git\"\n\n[fleets.\"has space\"]\nurl = \"https://example.invalid/team.git\"\n",
         )?;
 
         let err = load_registry().unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("has space"),
-            "error must name the offending context key: {msg}"
+            "error must name the offending fleet key: {msg}"
         );
         assert!(
-            msg.contains("invalid context name"),
+            msg.contains("invalid fleet name"),
             "error must be the G4 validation error: {msg}"
         );
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
-    /// A registry whose contexts are all valid loads unchanged (the G4 gate
+    /// A registry whose fleets are all valid loads unchanged (the G4 gate
     /// admits the existing well-formed registries).
     #[test]
-    fn load_registry_accepts_valid_context_keys() -> Result<()> {
+    fn load_registry_accepts_valid_fleet_keys() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _g = EnvGuard::capture(CONFIG_ENV_KEYS);
-        let config_dir = seed_two_context_home("g4-ok-context");
+        let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
+        let config_dir = seed_two_fleet_home("g4-ok-fleet");
 
         let registry = load_registry()?.expect("valid registry must load");
-        assert!(registry.contexts.contains_key("personal"));
-        assert!(registry.contexts.contains_key("work"));
+        assert!(registry.fleets.contains_key("personal"));
+        assert!(registry.fleets.contains_key("work"));
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
@@ -1702,13 +1324,13 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    // ---- A5 Session 3a: the context derivation order (ADR 0032 addendum) ----
+    // ---- A5 Session 3a: the fleet derivation order (ADR 0032 addendum) ----
     //
     // Fixture conventions: pinned WORKESTRATE_CONFIG (ConfigDirKind::Env: registry
     // at <config>/config.toml, managed clones at <config>/fleets/<name>),
     // REAL temp git repos (the git.rs precedent: git on the pinned PATH),
     // ENV_TEST_LOCK + EnvGuard over the discovery vars PLUS the two ladder
-    // env vars (WORKESTRATE_CONTEXT is removed by default and set per test;
+    // env vars (WORKESTRATE_FLEET is removed by default and set per test;
     // WORKESTRATE_CONFIG_REF likewise).
 
     const A5_DERIVE_ENV_KEYS: &[&str] = &[
@@ -1720,7 +1342,7 @@ pub(crate) mod tests {
         "WORKESTRATE_NO_PROJECT_CONFIG",
         "WORKESTRATE_INVOKE_CWD",
         "HOME",
-        "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_FLEET",
         "WORKESTRATE_CONFIG_REF",
     ];
 
@@ -1729,7 +1351,7 @@ pub(crate) mod tests {
     fn a5_derive_config(label: &str) -> std::path::PathBuf {
         let config_dir = pin_config(label);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_CONFIG_REF") };
         config_dir
@@ -1765,9 +1387,9 @@ pub(crate) mod tests {
     }
 
     /// Register a Remote entry `name` with a managed clone
-    /// (`<config>/fleets/<name>`) on branch `checkout_branch`, in a
-    /// bare-layers config (`layers = [<name>]`, no [contexts]).
-    fn a5_derive_remote_bare_config(
+    /// (`<config>/fleets/<name>`) on branch `checkout_branch`, as the
+    /// config's default_fleet (`layers = [<name>]`).
+    fn a5_derive_remote_config(
         label: &str,
         name: &str,
         checkout_branch: &str,
@@ -1778,21 +1400,21 @@ pub(crate) mod tests {
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                "layers = [\"{name}\"]\n\n[fleets.{name}]\nurl = \"https://example.invalid/{name}.git\"\nref = \"main\"\n"
+                "layers = [\"{name}\"]\n\n[settings]\ndefault_fleet = \"{name}\"\n\n[fleets.{name}]\nurl = \"https://example.invalid/{name}.git\"\nref = \"main\"\n"
             ),
         )
         .expect("write registry");
         config_dir
     }
 
-    /// Step b: a branch-shaped --config-ref namespaces a bare-layers config —
-    /// name = Some(<branch>) over the bare layer list (the dev-model
-    /// namespacing).
+    /// Step b: a branch-shaped --config-ref namespaces the session —
+    /// name = Some(<branch>) over the default fleet's single layer (the
+    /// dev-model namespacing).
     #[test]
-    fn config_ref_branch_namespaces_a_bare_layers_home() -> Result<()> {
+    fn config_ref_branch_namespaces_the_default_fleet() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-cfgref", "team", "main");
+        let config_dir = a5_derive_remote_config("a5-derive-cfgref", "team", "main");
         let clone = config_dir.join("fleets").join("team");
         // The branch exists in the clone but is NOT checked out (isolating
         // step b from step c, which would report the checkout branch).
@@ -1800,7 +1422,7 @@ pub(crate) mod tests {
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
 
         assert_eq!(ctx.name.as_deref(), Some("feat-x"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
@@ -1808,27 +1430,28 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// Step b with a purely-sha --config-ref yields NO context (shas are
-    /// not branches); with no checkout-branch candidate either (detached
-    /// HEAD), the bare-layers config keeps name = None.
+    /// Step b with a purely-sha --config-ref yields NO derived fleet name
+    /// (shas are not branches); with no checkout-branch candidate either
+    /// (detached HEAD), the default_fleet resolves.
     #[test]
-    fn sha_config_ref_yields_no_context_name() -> Result<()> {
+    fn sha_config_ref_yields_no_derived_fleet_name() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-sha", "team", "main");
+        let config_dir = a5_derive_remote_config("a5-derive-sha", "team", "main");
         let clone = config_dir.join("fleets").join("team");
         let sha = crate::git::git_rev_parse(&clone)?;
-        // Detach HEAD so step c cannot name a context either — isolating
+        // Detach HEAD so step c cannot name a fleet either — isolating
         // the sha-ref behavior at step b.
         crate::git::git_checkout_rev(&clone, &sha)?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", &sha) };
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
 
         assert_eq!(
-            ctx.name, None,
-            "a purely-sha --config-ref must not set a context name"
+            ctx.name.as_deref(),
+            Some("team"),
+            "a purely-sha --config-ref yields no candidate; the default_fleet resolves"
         );
         assert_eq!(ctx.layers, vec!["team".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
@@ -1839,7 +1462,7 @@ pub(crate) mod tests {
     /// the candidate — a PlainPath working repo (local_entry_checkout_dir)
     /// and a managed clone alike.
     #[test]
-    fn checkout_branch_namespaces_a_bare_layers_home() -> Result<()> {
+    fn checkout_branch_namespaces_the_default_fleet() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
 
@@ -1850,47 +1473,47 @@ pub(crate) mod tests {
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                "layers = [\"local\"]\n\n[fleets.local]\nurl = \"{}\"\n",
+                "layers = [\"local\"]\n\n[settings]\ndefault_fleet = \"local\"\n\n[fleets.local]\nurl = \"{}\"\n",
                 work.display()
             ),
         )?;
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("wip"));
         assert_eq!(ctx.layers, vec!["local".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
 
         // (ii) Remote entry: the managed clone's checkout branch.
-        let config_dir = a5_derive_remote_bare_config("a5-derive-clonebr", "team", "on-call");
-        let ctx = resolve_active_context()?;
+        let config_dir = a5_derive_remote_config("a5-derive-clonebr", "team", "on-call");
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("on-call"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
-    /// Ladder precedence (a > b): an explicit --context (WORKESTRATE_CONTEXT)
+    /// Ladder precedence (a > b): an explicit --fleet (WORKESTRATE_FLEET)
     /// beats a branch-shaped --config-ref, with UNCHANGED strict semantics.
     #[test]
-    fn explicit_context_beats_config_ref_branch() -> Result<()> {
+    fn explicit_fleet_beats_config_ref_branch() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-explicit", "team", "main");
+        let config_dir = a5_derive_remote_config("a5-derive-explicit", "team", "main");
         let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat-x"]);
-        // Add a [contexts.work] section (layers = [team]).
+        // Register a second fleet `work` alongside the default `team`.
         std::fs::write(
             config_dir.join("config.toml"),
-            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+            "layers = [\"team\"]\n\n[settings]\ndefault_fleet = \"team\"\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[fleets.work]\nurl = \"https://example.invalid/work.git\"\n",
         )?;
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONTEXT", "work") };
+        unsafe { std::env::set_var("WORKESTRATE_FLEET", "work") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
 
         assert_eq!(ctx.name.as_deref(), Some("work"));
-        assert_eq!(ctx.layers, vec!["team".to_string()]);
+        assert_eq!(ctx.layers, vec!["work".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
@@ -1903,13 +1526,13 @@ pub(crate) mod tests {
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
         // Clone is CHECKED OUT on main (the step-c candidate) while feat-x
         // exists as a branch (the step-b candidate via --config-ref).
-        let config_dir = a5_derive_remote_bare_config("a5-derive-b-over-c", "team", "main");
+        let config_dir = a5_derive_remote_config("a5-derive-b-over-c", "team", "main");
         let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat-x"]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat-x") };
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
 
         assert_eq!(
             ctx.name.as_deref(),
@@ -1921,119 +1544,116 @@ pub(crate) mod tests {
     }
 
     /// Ladder precedence (c > d): the checkout branch beats the default —
-    /// an UNDEFINED candidate rides leniently over default_context's
-    /// layers; a DEFINED candidate resolves to its own context's layers.
+    /// an UNREGISTERED candidate rides leniently over default_fleet's
+    /// layer; a REGISTERED candidate resolves to its own single layer.
     #[test]
-    fn checkout_branch_beats_default_context() -> Result<()> {
+    fn checkout_branch_beats_default_fleet() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-c-over-d", "team", "feat-wip");
+        let config_dir = a5_derive_remote_config("a5-derive-c-over-d", "team", "feat-wip");
         let clone = config_dir.join("fleets").join("team");
         std::fs::write(
             config_dir.join("config.toml"),
-            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[settings]\ndefault_context = \"stable\"\n\n[contexts.stable]\nlayers = [\"team\"]\n\n[contexts.dev]\nlayers = [\"other\"]\n",
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[settings]\ndefault_fleet = \"stable\"\n\n[fleets.stable]\nurl = \"https://example.invalid/stable.git\"\n\n[fleets.dev]\nurl = \"https://example.invalid/dev.git\"\n",
         )?;
 
-        // Undefined candidate: name rides over the DEFAULT's layers.
-        let ctx = resolve_active_context()?;
+        // Unregistered candidate: the name rides over the DEFAULT's layer.
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-wip"));
         assert_eq!(
             ctx.layers,
-            vec!["team".to_string()],
-            "an undefined candidate falls back to default_context's layers"
+            vec!["stable".to_string()],
+            "an unregistered candidate falls back to default_fleet's layer"
         );
 
-        // Defined candidate: its OWN layers.
+        // Registered candidate: its OWN single layer.
         a5_derive_git(&clone, &["checkout", "--quiet", "-b", "dev"]);
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("dev"));
-        assert_eq!(ctx.layers, vec!["other".to_string()]);
+        assert_eq!(ctx.layers, vec!["dev".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
-    /// Ladder discipline: contexts defined + candidate undefined + NO
-    /// default_context → the existing hard error stands.
+    /// Ladder discipline: fleets registered + candidate unregistered + NO
+    /// default_fleet → the hard error stands.
     #[test]
-    fn undefined_candidate_with_contexts_and_no_default_errors() -> Result<()> {
+    fn undefined_candidate_with_fleets_and_no_default_errors() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-no-default", "team", "wip");
+        let config_dir = a5_derive_remote_config("a5-derive-no-default", "team", "wip");
         std::fs::write(
             config_dir.join("config.toml"),
-            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[contexts.work]\nlayers = [\"team\"]\n",
+            "layers = [\"team\"]\n\n[fleets.team]\nurl = \"https://example.invalid/team.git\"\nref = \"main\"\n\n[fleets.work]\nurl = \"https://example.invalid/work.git\"\n",
         )?;
 
-        let err = resolve_active_context().expect_err("undefined candidate must hard-error");
+        let err = resolve_active_fleet().expect_err("undefined candidate must hard-error");
         let msg = err.to_string();
         assert!(
-            msg.contains("contexts are defined but no default_context is set"),
-            "the existing hard error must stand: {msg}"
+            msg.contains("fleets are registered but no default_fleet is set"),
+            "the hard error must stand: {msg}"
         );
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
-    // ---- Candidate slugification (2026-08-28): ladder-derived context-name
-    // candidates ride in the context-name charset ----
+    // ---- Candidate slugification (2026-08-28): ladder-derived fleet-name
+    // candidates ride in the fleet-name charset ----
 
     /// The pure slug core: lowercase ASCII, every maximal illegal run → one
     /// `-`, leading/trailing `-` trimmed, None when nothing usable remains.
     #[test]
-    fn slugify_context_candidate_maps_illegal_runs_to_dashes() {
+    fn slugify_fleet_candidate_maps_illegal_runs_to_dashes() {
         // Slash (the common feature/x case), uppercase, `#`, dots.
         assert_eq!(
-            slugify_context_candidate("feat/Foo#1.2").as_deref(),
+            slugify_fleet_candidate("feat/Foo#1.2").as_deref(),
             Some("feat-foo-1-2")
         );
         assert_eq!(
-            slugify_context_candidate("migration/tool-model").as_deref(),
+            slugify_fleet_candidate("migration/tool-model").as_deref(),
             Some("migration-tool-model")
         );
         assert_eq!(
-            slugify_context_candidate("Fix__Big--Thing").as_deref(),
+            slugify_fleet_candidate("Fix__Big--Thing").as_deref(),
             Some("fix-big-thing")
         );
         // Maximal illegal runs collapse to a single dash; leading/trailing
         // runs are trimmed (never a leading/trailing dash).
-        assert_eq!(slugify_context_candidate("--wip--").as_deref(), Some("wip"));
-        assert_eq!(
-            slugify_context_candidate("//a//b//").as_deref(),
-            Some("a-b")
-        );
+        assert_eq!(slugify_fleet_candidate("--wip--").as_deref(), Some("wip"));
+        assert_eq!(slugify_fleet_candidate("//a//b//").as_deref(), Some("a-b"));
         // All-illegal input yields NO candidate (the ladder falls through).
-        assert_eq!(slugify_context_candidate("###"), None);
-        assert_eq!(slugify_context_candidate(""), None);
+        assert_eq!(slugify_fleet_candidate("###"), None);
+        assert_eq!(slugify_fleet_candidate(""), None);
         // A legal branch name passes through UNCHANGED.
         assert_eq!(
-            slugify_context_candidate("feat-wip-2").as_deref(),
+            slugify_fleet_candidate("feat-wip-2").as_deref(),
             Some("feat-wip-2")
         );
-        assert_eq!(slugify_context_candidate("main").as_deref(), Some("main"));
-        // Every Some result satisfies the context-name gate.
+        assert_eq!(slugify_fleet_candidate("main").as_deref(), Some("main"));
+        // Every Some result satisfies the fleet-name gate.
         for raw in ["feat/Foo#1.2", "migration/tool-model", "feat-wip-2"] {
-            let slug = slugify_context_candidate(raw).expect("slug");
-            validate_context_name(&slug).expect("slug must satisfy validate_context_name");
+            let slug = slugify_fleet_candidate(raw).expect("slug");
+            validate_fleet_prefix(&slug).expect("slug must satisfy validate_fleet_prefix");
         }
     }
 
-    /// Step c slugifies: a checkout branch outside the context-name charset
-    /// namespaces the bare-layers config under the SLUG, not the raw name.
+    /// Step c slugifies: a checkout branch outside the fleet-name charset
+    /// namespaces the session under the SLUG, not the raw name.
     #[test]
     fn checkout_branch_candidate_is_slugified() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
         let config_dir =
-            a5_derive_remote_bare_config("a5-derive-slug-c", "team", "migration/tool-model");
+            a5_derive_remote_config("a5-derive-slug-c", "team", "migration/tool-model");
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("migration-tool-model"));
         assert_eq!(ctx.layers, vec!["team".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);
 
         // A branch with `#`, uppercase, and dots.
-        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-c2", "team", "feat/Foo#1.2");
-        let ctx = resolve_active_context()?;
+        let config_dir = a5_derive_remote_config("a5-derive-slug-c2", "team", "feat/Foo#1.2");
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
@@ -2045,33 +1665,34 @@ pub(crate) mod tests {
     fn config_ref_branch_candidate_is_slugified() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
-        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-b", "team", "main");
+        let config_dir = a5_derive_remote_config("a5-derive-slug-b", "team", "main");
         let clone = config_dir.join("fleets").join("team");
         a5_derive_git(&clone, &["branch", "feat/Foo#1.2"]);
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::set_var("WORKESTRATE_CONFIG_REF", "feat/Foo#1.2") };
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
         assert_eq!(ctx.name.as_deref(), Some("feat-foo-1-2"));
         let _ = std::fs::remove_dir_all(&config_dir);
         Ok(())
     }
 
     /// An all-illegal branch slugifies to NOTHING: the ladder falls through
-    /// to step d (bare-layers config keeps name = None) rather than riding an
-    /// illegal context name.
+    /// to step d (the default_fleet resolves) rather than riding an illegal
+    /// fleet name.
     #[test]
     fn all_illegal_branch_yields_no_candidate() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         let _g = EnvGuard::capture(A5_DERIVE_ENV_KEYS);
         // `###` is a valid git branch name (check-ref-format) but has no
-        // usable context-name characters.
-        let config_dir = a5_derive_remote_bare_config("a5-derive-slug-none", "team", "###");
+        // usable fleet-name characters.
+        let config_dir = a5_derive_remote_config("a5-derive-slug-none", "team", "###");
 
-        let ctx = resolve_active_context()?;
+        let ctx = resolve_active_fleet()?;
         assert_eq!(
-            ctx.name, None,
-            "an all-illegal checkout branch must yield NO candidate"
+            ctx.name.as_deref(),
+            Some("team"),
+            "an all-illegal checkout branch yields NO candidate; the default_fleet resolves"
         );
         assert_eq!(ctx.layers, vec!["team".to_string()]);
         let _ = std::fs::remove_dir_all(&config_dir);

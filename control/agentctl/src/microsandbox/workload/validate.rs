@@ -40,7 +40,7 @@ pub fn validate_env_override(name: &str) -> Result<()> {
         "SOPS_AGE_KEY_FILE",
         "WORKESTRATE_FLEET_DIR",
         "WORKESTRATE_NO_PROJECT_CONFIG",
-        "WORKESTRATE_CONTEXT",
+        "WORKESTRATE_FLEET",
         "WORKESTRATE_INVOKE_CWD",
         "AGENTCTL_ROOT",
     ];
@@ -318,7 +318,7 @@ mod tests {
             "SOPS_AGE_KEY_FILE",
             "WORKESTRATE_FLEET_DIR",
             "WORKESTRATE_NO_PROJECT_CONFIG",
-            "WORKESTRATE_CONTEXT",
+            "WORKESTRATE_FLEET",
             "WORKESTRATE_INVOKE_CWD",
             "AGENTCTL_ROOT",
             "XDG_CONFIG_HOME",

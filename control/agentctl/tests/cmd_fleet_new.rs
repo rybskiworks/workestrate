@@ -318,8 +318,8 @@ fn fleet_new_default_path_is_store() {
     );
 
     // A subsequent validate-config must succeed — load_config resolves the
-    // active context, finds "personal" in the bare layers list (auto-added
-    // by register_fleet), and loads the workestrate.toml from the store.
+    // active fleet: register_fleet made "personal" the default_fleet (and
+    // added it to the bare layers list), so the store workestrate.toml loads.
     let out = home
         .cmd()
         .env("WORKESTRATE_CONFIG", &store)

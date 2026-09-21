@@ -1965,13 +1965,55 @@ pub struct PortEntry {
 // Registry
 // ---------------------------------------------------------------------------
 
+/// Friendly-cutover deserializer for the REMOVED `default_context` key: any
+/// registry TOML still carrying it hard-errors with a targeted migration
+/// message instead of a bare serde unknown-field error. Only runs when the
+/// key is present (absent hits `#[serde(default)]`).
+fn removed_default_context<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "settings.default_context was removed — contexts are retired; select a registered \
+         fleet directly with default_fleet = \"<name>\" in [settings] or the global \
+         --fleet <name> flag",
+    ))
+}
+
+/// Friendly-cutover deserializer for the REMOVED `[contexts.*]` tables: any
+/// registry TOML still carrying them hard-errors with a targeted migration
+/// message instead of a bare serde unknown-field error. Only runs when the
+/// key is present (absent hits `#[serde(default)]`).
+fn removed_contexts<'de, D>(deserializer: D) -> Result<Option<()>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "the [contexts.*] tables were removed — contexts are retired; every context was a \
+         1:1 alias for a fleet, so name the fleet directly: default_fleet = \"<name>\" in \
+         [settings] or the global --fleet <name> flag (the active fleet is its own layer)",
+    ))
+}
+
 /// Tool-wide settings section of the config `registry.toml` (`[settings]`).
-/// `default_context` selects the active context when none is given;
+/// `default_fleet` selects the active fleet when none is given;
 /// `store_dir`/`state_dir` override the derived store/state locations.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistrySettings {
-    pub default_context: Option<String>,
+    /// Tombstone for the removed `default_context` key (hard-errors with a
+    /// targeted migration message). Never constructed.
+    #[serde(
+        default,
+        deserialize_with = "removed_default_context",
+        skip_serializing
+    )]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub default_context: Option<()>,
+    pub default_fleet: Option<String>,
     pub store_dir: Option<String>,
     pub state_dir: Option<String>,
     /// Layout version of the config. Absent ⇒ 1 (legacy XDG-derived layout).
@@ -2032,20 +2074,9 @@ pub struct TrustedProject {
     pub path: String,
 }
 
-/// A named context in the registry (`[contexts.<name>]`): an ordered list of
-/// config-layer names merged (earlier = lower precedence) when the context is
-/// active.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Context {
-    #[serde(default)]
-    pub layers: Vec<String>,
-}
-
 /// Schema root of the config `registry.toml`: global `[settings]`, the
-/// registered fleets (`fleets`), the default layer stack (`layers`),
-/// named contexts (`contexts`), and the trusted-project list. Written
-/// atomically by `config::save_registry`.
+/// registered fleets (`fleets`), the default layer stack (`layers`), and the
+/// trusted-project list. Written atomically by `config::save_registry`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {
@@ -2055,8 +2086,12 @@ pub struct Registry {
     pub fleets: HashMap<String, FleetEntry>,
     #[serde(default)]
     pub layers: Vec<String>,
-    #[serde(default)]
-    pub contexts: HashMap<String, Context>,
+    /// Tombstone for the removed `[contexts.*]` tables (hard-errors with a
+    /// targeted migration message). Never constructed.
+    #[serde(default, deserialize_with = "removed_contexts", skip_serializing)]
+    #[schemars(skip)]
+    #[doc(hidden)]
+    pub contexts: Option<()>,
     #[serde(default)]
     pub trusted_projects: Vec<TrustedProject>,
     #[serde(default)]
@@ -2146,13 +2181,6 @@ mod tests {
             "configs typo must fail: {err}"
         );
 
-        // [contexts.<name>] typo.
-        let err = toml::from_str::<Registry>("[contexts.personal]\nlayerz = []\n").unwrap_err();
-        assert!(
-            err.to_string().contains("unknown field"),
-            "contexts typo must fail: {err}"
-        );
-
         // [[trusted_projects]] typo.
         let err =
             toml::from_str::<Registry>("[[trusted_projects]]\npathz = \"/tmp/x\"\n").unwrap_err();
@@ -2186,7 +2214,7 @@ mod tests {
 layers = ["personal"]
 
 [settings]
-default_context = "personal"
+default_fleet = "personal"
 store_dir = "/tmp/store"
 state_dir = "/tmp/state"
 config_version = 2
@@ -2199,16 +2227,45 @@ secrets = "file"
 secrets_file = ".env.enc"
 age_key_file = "~/.config/sops/age/keys.txt"
 
-[contexts.personal]
-layers = ["personal"]
-
 [[trusted_projects]]
 path = "/tmp/project"
 "#;
         let registry: Registry = toml::from_str(raw).unwrap();
         assert_eq!(registry.settings.config_version, Some(2));
+        assert_eq!(registry.settings.default_fleet.as_deref(), Some("personal"));
         assert_eq!(registry.fleets["personal"].r#ref.as_deref(), Some("main"));
         assert_eq!(registry.trusted_projects.len(), 1);
+    }
+
+    /// The retired context vocabulary hard-errors with TARGETED migration
+    /// messages naming the replacements (not a bare serde unknown-field
+    /// error): `default_context` → `default_fleet`, `[contexts.*]` →
+    /// `--fleet` / `default_fleet`.
+    #[test]
+    fn registry_retired_context_keys_error_with_migration_messages() {
+        let err = toml::from_str::<Registry>("[settings]\ndefault_context = \"personal\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("default_context was removed"),
+            "default_context must hard-error as removed: {err}"
+        );
+        assert!(
+            err.contains("default_fleet") && err.contains("--fleet"),
+            "the message must name the replacements: {err}"
+        );
+
+        let err = toml::from_str::<Registry>("[contexts.personal]\nlayers = [\"personal\"]\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("[contexts.*] tables were removed"),
+            "[contexts.*] must hard-error as removed: {err}"
+        );
+        assert!(
+            err.contains("default_fleet") && err.contains("--fleet"),
+            "the message must name the replacements: {err}"
+        );
     }
 
     // ---- image.binary (BinarySpec): worker is optional ----

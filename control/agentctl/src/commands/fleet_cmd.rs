@@ -1,11 +1,10 @@
-//! Fleet and context commands (`workestrate fleet …`,
-//! `workestrate context …`).
+//! Fleet commands (`workestrate fleet …`).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::cli_actions::{ContextAction, FleetAction};
+use crate::cli_actions::FleetAction;
 use crate::commands::init::find_reference_workestrate;
 use crate::commands::secrets_target::derive_age_recipient;
 use crate::config;
@@ -64,13 +63,12 @@ pub async fn cmd_fleet(action: FleetAction) -> Result<()> {
 /// `--delete`, also remove the store clone at `<store>/fleets/<name>`;
 /// refuses
 /// to delete a dirty clone unless `--force` is passed. The name is also
-/// scrubbed from the bare `layers` list and every context's `layers`. A
-/// dangling `settings.default_context` pointing at the removed name is
-/// cleared (with a warning).
+/// scrubbed from the bare `layers` list. A dangling `settings.default_fleet`
+/// pointing at the removed name is cleared (with a warning).
 pub fn cmd_fleet_remove(name: &str, delete: bool, force: bool) -> Result<()> {
     config::validate_fleet_name(name)?;
     let mut registry = config::load_registry()?
-        .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate init' first"))?;
+        .ok_or_else(|| anyhow::anyhow!("no registry found; run 'workestrate config init' first"))?;
     if !registry.fleets.contains_key(name) {
         anyhow::bail!("fleet '{}' is not registered", name);
     }
@@ -93,13 +91,10 @@ pub fn cmd_fleet_remove(name: &str, delete: bool, force: bool) -> Result<()> {
 
     registry.fleets.remove(name);
     registry.layers.retain(|l| l != name);
-    for ctx in registry.contexts.values_mut() {
-        ctx.layers.retain(|l| l != name);
-    }
-    if registry.settings.default_context.as_deref() == Some(name) {
-        registry.settings.default_context = None;
+    if registry.settings.default_fleet.as_deref() == Some(name) {
+        registry.settings.default_fleet = None;
         eprintln!(
-            "warning: cleared default_context '{}' (it pointed at the removed fleet)",
+            "warning: cleared default_fleet '{}' (it pointed at the removed fleet)",
             name
         );
     }
@@ -115,129 +110,6 @@ pub fn cmd_fleet_remove(name: &str, delete: bool, force: bool) -> Result<()> {
     }
 
     println!("Unregistered fleet: {}", name);
-    Ok(())
-}
-
-/// `workestrate context list|current|use` — inspect defined contexts, the
-/// currently-resolved active context, and set the default context.
-pub async fn cmd_context(action: ContextAction, json: bool) -> Result<()> {
-    match action {
-        ContextAction::List => cmd_context_list(json),
-        ContextAction::Current => cmd_context_current(json),
-        ContextAction::Use { name } => cmd_context_use(&name, json),
-    }
-}
-
-/// `workestrate context use <name>` — persist `settings.default_context` in
-/// the registry. The setter validates that `<name>` is a defined context.
-pub fn cmd_context_use(name: &str, json: bool) -> Result<()> {
-    config::set_default_context(name)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "default_context": name,
-            }))?
-        );
-    } else {
-        println!("Default context set to '{}'", name);
-    }
-    Ok(())
-}
-
-pub fn cmd_context_list(json: bool) -> Result<()> {
-    let registry = match config::load_registry()? {
-        Some(r) => r,
-        None => {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "contexts": [],
-                    }))?
-                );
-            } else {
-                println!("(no registry found)");
-            }
-            return Ok(());
-        }
-    };
-
-    let mut names: Vec<&String> = registry.contexts.keys().collect();
-    names.sort();
-
-    if json {
-        let contexts: Vec<serde_json::Value> = names
-            .iter()
-            .map(|name| {
-                let ctx = &registry.contexts[*name];
-                let is_default = registry.settings.default_context.as_ref() == Some(*name);
-                serde_json::json!({
-                    "name": name,
-                    "layers": ctx.layers,
-                    "is_default": is_default,
-                })
-            })
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "contexts": contexts }))?
-        );
-    } else {
-        println!("Contexts:");
-        for name in names {
-            let ctx = &registry.contexts[name];
-            let is_default = registry.settings.default_context.as_ref() == Some(name);
-            if is_default {
-                println!("  {} (default)", name);
-            } else {
-                println!("  {}", name);
-            }
-            println!("    layers: {}", ctx.layers.join(", "));
-        }
-    }
-    Ok(())
-}
-
-pub fn cmd_context_current(json: bool) -> Result<()> {
-    let active = config::resolve_active_context()?;
-
-    // Resolution-source classification: env (--context flag / WORKESTRATE_CONTEXT)
-    // wins; otherwise the registry default_context; otherwise bare-layers
-    // backward-compat when no contexts are defined at all.
-    let source = if std::env::var("WORKESTRATE_CONTEXT").is_ok() {
-        "env"
-    } else if let Ok(Some(ref reg)) = config::load_registry() {
-        if reg.settings.default_context.is_some() {
-            "default"
-        } else if reg.contexts.is_empty() {
-            "bare"
-        } else {
-            "default"
-        }
-    } else {
-        "bare"
-    };
-
-    if json {
-        let body = serde_json::json!({
-            "name": active.name,
-            "source": source,
-            "layers": active.layers,
-        });
-        println!("{}", serde_json::to_string_pretty(&body)?);
-    } else {
-        match active.name {
-            Some(ref name) => println!("Active context: {}", name),
-            None => println!("Active context: (none — using bare layers)"),
-        }
-        let source_label = match source {
-            "env" => "env (--context flag or WORKESTRATE_CONTEXT)",
-            other => other,
-        };
-        println!("  source: {}", source_label);
-        println!("  layers: [{}]", active.layers.join(", "));
-    }
     Ok(())
 }
 
@@ -713,7 +585,7 @@ pub async fn cmd_fleet_list() -> Result<()> {
     match config::load_registry()? {
         None => {
             println!(
-                "(no registry found; run 'workestrate init' or 'workestrate fleet add <url> <name>')"
+                "(no registry found; run 'workestrate config init' or 'workestrate fleet add <url> <name>')"
             );
         }
         Some(registry) => {
@@ -742,7 +614,20 @@ pub async fn cmd_fleet_list() -> Result<()> {
                     );
                 }
             }
-            println!("Layers: {:?}", registry.layers);
+            match registry.settings.default_fleet.as_deref() {
+                Some(name) => println!("Default fleet: {}", name),
+                None => println!("Default fleet: (none)"),
+            }
+            match config::resolve_active_fleet() {
+                Ok(active) => match active.name {
+                    Some(name) => println!("Active fleet: {}", name),
+                    None => println!(
+                        "Active fleet: (none — using bare layers [{}])",
+                        active.layers.join(", ")
+                    ),
+                },
+                Err(e) => println!("Active fleet: [ERROR] {}", e),
+            }
             println!("Trusted projects:");
             if registry.trusted_projects.is_empty() {
                 println!("  (none)");

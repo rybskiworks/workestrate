@@ -149,20 +149,21 @@ const MAX_SUPPORTED_CONFIG_VERSION: u32 = 2;
 
 pub fn cmd_config(action: ConfigAction) -> Result<()> {
     match action {
-        ConfigAction::Init { fleet, name } => cmd_config_init(fleet.as_deref(), &name),
+        ConfigAction::Init {} => cmd_config_init(),
         ConfigAction::Clone { src, dest } => cmd_config_clone(&src, dest.as_deref()),
     }
 }
 
-/// `workestrate config init [--fleet <url>] [--name <n>]`.
+/// `workestrate config init`.
 ///
 /// Scaffolds the RESOLVED config (no path flag; `WORKESTRATE_CONFIG` /
 /// legacy XDG / default resolution decides which config) as a dotfiles-style
 /// git repo. Idempotent: re-running on an initialized config is a pure no-op.
 /// For an empty scaffold at a custom path, use the global flag:
 /// `workestrate --config <path> config init`. To provision from an existing
-/// config, use `workestrate config clone <src> [dest]`.
-pub fn cmd_config_init(fleet_url: Option<&str>, name: &str) -> Result<()> {
+/// config, use `workestrate config clone <src> [dest]`. To register a fleet
+/// afterwards, use `workestrate fleet add <url> <name>`.
+pub fn cmd_config_init() -> Result<()> {
     // 1. Resolve the config via the standard precedence (env → legacy XDG →
     //    default). No path flag; resolution is entirely what
     //    resolve_config_dir_with_kind already does.
@@ -170,19 +171,12 @@ pub fn cmd_config_init(fleet_url: Option<&str>, name: &str) -> Result<()> {
     std::fs::create_dir_all(&config_dir)?;
 
     // 2. Idempotency: an existing .git means the config is already a repo.
-    //    Pure no-op — do NOT rewrite .gitignore/hook, do NOT run the
-    //    --fleet flow.
+    //    Pure no-op — do NOT rewrite .gitignore/hook.
     if config_dir.join(".git").exists() {
         println!(
             "Config at {} is already initialized as a git repo (nothing to do).",
             config_dir.display()
         );
-        if fleet_url.is_some() {
-            println!(
-                "note: --fleet was ignored on the no-op path; run \
-                 'workestrate fleet add <url> {name}' instead."
-            );
-        }
         return Ok(());
     }
 
@@ -221,25 +215,16 @@ pub fn cmd_config_init(fleet_url: Option<&str>, name: &str) -> Result<()> {
     // 6. Pre-commit hook (executable on unix).
     install_pre_commit_hook(&config_dir)?;
 
-    // 7. Optional --fleet: clone + register via the existing machinery.
-    //    Validate the name first so a bad name fails before the clone.
-    if let Some(url) = fleet_url {
-        config::validate_fleet_name(name)?;
-        crate::commands::fleet_cmd::cmd_fleet_add(url, name, "main")?;
-    }
-
-    // 8. ADR 0025(e): write the generated lock. This runs AFTER a successful
+    // 7. ADR 0025(e): write the generated lock. This runs AFTER a successful
     //    init only — never on the idempotent no-op path above (which leaves
     //    the config, including its lock, untouched). The registry may not exist
-    //    yet when --fleet wasn't passed (cmd_fleet_add already wrote the
-    //    lock when it was); a bare init with no fleets writes a lock
-    //    with an empty `fleets` map.
+    //    yet; a bare init writes a lock with an empty `fleets` map.
     let registry = config::load_registry()?.unwrap_or_default();
     let lock = config::lock_from_registry(&registry, &config_dir);
     config::save_config_lock_to(&config_dir, &lock)?;
 
-    // 9. Summary + next steps.
-    print_summary(&config_dir, fleet_url.is_some(), name, &ensured);
+    // 8. Summary + next steps.
+    print_summary(&config_dir, &ensured);
     Ok(())
 }
 
@@ -779,9 +764,9 @@ fn install_pre_commit_hook(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Human-readable summary in the cmd_init/cmd_new println style. Two forms:
-/// with/without --fleet; both end with the dotfiles-remote step.
-fn print_summary(config_dir: &Path, with_fleet: bool, name: &str, ensured: &[&str]) {
+/// Human-readable summary in the cmd_new println style. Ends with the
+/// dotfiles-remote step.
+fn print_summary(config_dir: &Path, ensured: &[&str]) {
     println!(
         "Initialized workestrate config at {} as a git repo.",
         config_dir.display()
@@ -797,21 +782,13 @@ fn print_summary(config_dir: &Path, with_fleet: bool, name: &str, ensured: &[&st
         println!();
         println!("Ensured dirs: {}", ensured.join(", "));
     }
-    if with_fleet {
-        println!();
-        println!("Cloned and registered fleet '{name}' in fleets/{name}.");
-    }
     println!();
     println!("Next steps:");
-    if with_fleet {
-        println!("  - run 'workestrate fleet list' to see the registered fleet");
-        println!("  - run 'workestrate validate-config' to check the active config");
-    } else {
-        println!(
-            "  - add a fleet: 'workestrate fleet new <name>' \
-             (or 'workestrate config init --fleet <url>')"
-        );
-    }
+    println!(
+        "  - add a fleet: 'workestrate fleet new <name>' \
+         (or 'workestrate fleet add <url> <name>')"
+    );
+    println!("  - run 'workestrate validate-config' to check the active config");
     println!(
         "  - add a remote for the dotfiles repo: \
          'git -C {} remote add origin <your-dotfiles-remote>' then push",

@@ -173,7 +173,7 @@ pub(crate) mod tests {
 
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        let old_ctx = std::env::var("WORKESTRATE_FLEET").ok();
         let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
         let old_ref = std::env::var("WORKESTRATE_REFERENCE_CONFIG").ok();
@@ -189,7 +189,7 @@ pub(crate) mod tests {
             )
         };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -227,7 +227,7 @@ pub(crate) mod tests {
         for (k, v) in [
             ("HOME", old_home),
             ("XDG_CONFIG_HOME", old_xdg),
-            ("WORKESTRATE_CONTEXT", old_ctx),
+            ("WORKESTRATE_FLEET", old_ctx),
             ("WORKESTRATE_FLEET_DIR", old_config_dir),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
             ("WORKESTRATE_REFERENCE_CONFIG", old_ref),
@@ -268,7 +268,7 @@ pub(crate) mod tests {
 
         let old_home = std::env::var("HOME").ok();
         let old_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        let old_ctx = std::env::var("WORKESTRATE_CONTEXT").ok();
+        let old_ctx = std::env::var("WORKESTRATE_FLEET").ok();
         let old_config_dir = std::env::var("WORKESTRATE_FLEET_DIR").ok();
         let old_no_project = std::env::var("WORKESTRATE_NO_PROJECT_CONFIG").ok();
         let old_cwd = std::env::current_dir().ok();
@@ -283,7 +283,7 @@ pub(crate) mod tests {
             )
         };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::remove_var("WORKESTRATE_CONTEXT") };
+        unsafe { std::env::remove_var("WORKESTRATE_FLEET") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
         unsafe { std::env::remove_var("WORKESTRATE_FLEET_DIR") };
         // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
@@ -304,7 +304,7 @@ pub(crate) mod tests {
         for (k, v) in [
             ("HOME", old_home),
             ("XDG_CONFIG_HOME", old_xdg),
-            ("WORKESTRATE_CONTEXT", old_ctx),
+            ("WORKESTRATE_FLEET", old_ctx),
             ("WORKESTRATE_FLEET_DIR", old_config_dir),
             ("WORKESTRATE_NO_PROJECT_CONFIG", old_no_project),
         ] {

@@ -504,16 +504,16 @@ pub fn resolve_active_fleet_dir() -> anyhow::Result<PathBuf> {
         }
     }
 
-    // 3. Registry context's first layer
+    // 3. Active fleet's first layer
     if let Ok(Some(_registry)) = crate::config::load_registry() {
-        let active_context = crate::config::resolve_active_context()?;
-        if let Some(name) = active_context.layers.first() {
+        let active_fleet = crate::config::resolve_active_fleet()?;
+        if let Some(name) = active_fleet.layers.first() {
             return Ok(resolve_store_dir().join("fleets").join(name));
         }
     }
 
     anyhow::bail!(
-        "no active fleet; run 'workestrate init' or 'workestrate fleet add <url> <name>' first"
+        "no active fleet; run 'workestrate config init' or 'workestrate fleet add <url> <name>' first"
     );
 }
 

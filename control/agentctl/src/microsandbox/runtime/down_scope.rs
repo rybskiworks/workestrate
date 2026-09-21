@@ -2,15 +2,15 @@
 //! scope model, classification engine, enumeration, and scope resolution
 //! for `workestrate down <scope>`.
 //!
-//! Ladder (narrowest → widest): `instance < workload < context (= branch) <
+//! Ladder (narrowest → widest): `instance < workload < fleet (= branch) <
 //! config-ref < config (--all) < everything (--everything, double-gated)`.
 //! The instance/workload rungs stay on the per-workload path
 //! (`workload <name> down [--instance|--all-instances]`); THIS module models
-//! the four sweep rungs (context / config-ref / config / everything).
+//! the four sweep rungs (fleet / config-ref / config / everything).
 //!
 //! Classification engine (§ Cleanup family rules STAND): a target is
 //! workestrate-managed iff registry record ∨ slot-name pattern
-//! (`<context>-<workload>`) ∨ artifact evidence (the detached-child
+//! (`<fleet>-<workload>`) ∨ artifact evidence (the detached-child
 //! `workestrate.log`, persisted in the state dir since 2026-08-30 — the
 //! legacy sandbox-dir location is still probed). Every target at every
 //! scope goes through the hardened
@@ -23,7 +23,7 @@
 //! `generations/<key12>` dirs and [`enumerate_generation_dir_candidates`]
 //! is the per-generation DIR-driven enumeration (no registry records: the
 //! workestrate port registry is generation-agnostic and is swept ONCE,
-//! against the resolved home). The targeted rungs (context / config-ref)
+//! against the resolved home). The targeted rungs (fleet / config-ref)
 //! — and `ps` — stay current-only.
 
 use anyhow::Result;
@@ -38,12 +38,12 @@ use microsandbox::Sandbox;
 /// (`workload <name> down [--instance|--all-instances]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownScope {
-    /// Every managed target whose record context (primary) or `<ctx>-`
-    /// slot prefix (corroborating) names `ctx`.
-    Context(String),
-    /// A VALIDATED branch-shaped config ref; resolves as the context the
+    /// Every managed target whose record fleet (primary) or `<fleet>-`
+    /// slot prefix (corroborating) names `fleet`.
+    Fleet(String),
+    /// A VALIDATED branch-shaped config ref; resolves as the fleet the
     /// branch implies. Records carry no config-ref stamp, so v1 config-ref
-    /// scope = validated-branch context scope (documented pin).
+    /// scope = validated-branch fleet scope (documented pin).
     ConfigRef(String),
     /// Config scope: every workestrate-managed target (today's `down --all`,
     /// now classification-reported).
@@ -59,7 +59,7 @@ impl DownScope {
     /// (`down <description>: N target(s)`) and the JSON `scope` field.
     pub fn description(&self) -> String {
         match self {
-            DownScope::Context(ctx) => format!("context '{ctx}'"),
+            DownScope::Fleet(fleet) => format!("fleet '{fleet}'"),
             DownScope::ConfigRef(r) => format!("config-ref '{r}'"),
             DownScope::Config => "--all (config)".to_string(),
             DownScope::Everything => "everything".to_string(),
@@ -74,7 +74,7 @@ pub enum Evidence {
     /// A port-registry record exists for the instance.
     RegistryRecord,
     /// The instance's slot (parallel id stripped) carries the
-    /// `<context>-<workload>` shape (contains `-`).
+    /// `<fleet>-<workload>` shape (contains `-`).
     SlotPattern,
     /// The instance carries the detached-child `workestrate.log` artifact
     /// (state dir since 2026-08-30; legacy sandbox dir still probed).
@@ -89,8 +89,8 @@ pub enum Evidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedTarget {
     pub instance: String,
-    /// The registry record's context, when a record exists. PRIMARY
-    /// evidence for context-scope resolution.
+    /// The registry record's fleet, when a record exists. PRIMARY
+    /// evidence for fleet-scope resolution.
     pub context: Option<String>,
     /// All evidence pieces found for this target (conservative ∨ per the
     /// ADR: any one piece makes the target managed).
@@ -102,7 +102,7 @@ pub struct ManagedTarget {
 /// - [`Evidence::RegistryRecord`] when a record exists (`record_context`
 ///   is `Some(..)`; the inner `Option` carries the record's context);
 /// - [`Evidence::SlotPattern`] when the slot (parallel id stripped via
-///   `slot_of_instance`) contains `-` — the `<ctx>-<wl>` shape;
+///   `slot_of_instance`) contains `-` — the `<fleet>-<wl>` shape;
 /// - [`Evidence::ArtifactLog`] when the instance carries the detached-child
 ///   `workestrate.log` (state dir since 2026-08-30; legacy sandbox dir
 ///   still probed).
@@ -154,7 +154,7 @@ fn artifact_log_exists(instance: &str) -> bool {
 /// through [`Sandbox::list_with`]. On ANY SDK error the caller's contract
 /// applies: DEGRADE with a stderr warning to the dir-listing fallback
 /// (`<msb_home>/sandboxes/*`) rather than failing the whole sweep — an
-/// unreachable store must not brick `down --context`.
+/// unreachable store must not brick `down --fleet`.
 async fn msb_sandbox_names() -> Vec<String> {
     const PAGE_LIMIT: u32 = 100;
     // Safety bound on pagination: opaque cursors are trusted to terminate;
@@ -372,25 +372,25 @@ async fn enumerate_targets(
 
 /// Resolve a ladder scope against a candidate list (PURE; unit-tested).
 ///
-/// - [`DownScope::Context`] / [`DownScope::ConfigRef`]: include a target
-///   iff its RECORD context equals the context (PRIMARY) OR the record is
-///   absent/None AND the slot-prefix `<ctx>-` matches (CORROBORATING). A
-///   record naming ANOTHER context EXCLUDES despite a slot-prefix match
+/// - [`DownScope::Fleet`] / [`DownScope::ConfigRef`]: include a target
+///   iff its RECORD fleet equals the fleet (PRIMARY) OR the record is
+///   absent/None AND the slot-prefix `<fleet>-` matches (CORROBORATING). A
+///   record naming ANOTHER fleet EXCLUDES despite a slot-prefix match
 ///   (the record is primary evidence — pinned). Matching is keyed on the
 ///   record/slot-prefix, NEVER bare-name equality: a workload whose NAME
-///   equals a context name is not matched by that fact alone. Zero matches
+///   equals a fleet name is not matched by that fact alone. Zero matches
 ///   → EMPTY outcome (Ok, reported as `0 target(s)` — never an error).
-///   ConfigRef behaves exactly as Context of the ref-implied branch AFTER
+///   ConfigRef behaves exactly as Fleet of the ref-implied branch AFTER
 ///   fail-closed validation ([`validate_config_ref`] at the command
 ///   boundary — records carry no config-ref stamp, so v1 config-ref scope =
-///   validated-branch context scope).
+///   validated-branch fleet scope).
 /// - [`DownScope::Config`]: every MANAGED target handed in.
 /// - [`DownScope::Everything`]: every target handed in INCLUDING unmanaged
 ///   ones (pass [`enumerate_all_candidates`]'s output); unmanaged targets
 ///   keep their empty evidence in the report.
 pub fn resolve_scope(scope: &DownScope, targets: &[ManagedTarget]) -> Vec<ManagedTarget> {
     let ctx: Option<&str> = match scope {
-        DownScope::Context(c) | DownScope::ConfigRef(c) => Some(c),
+        DownScope::Fleet(c) | DownScope::ConfigRef(c) => Some(c),
         DownScope::Config | DownScope::Everything => None,
     };
     targets
@@ -406,9 +406,9 @@ pub fn resolve_scope(scope: &DownScope, targets: &[ManagedTarget]) -> Vec<Manage
                     return false;
                 }
                 match t.context.as_deref() {
-                    // PRIMARY: the record names the context.
-                    Some(record_ctx) => record_ctx == c,
-                    // CORROBORATING: no record context — the `<ctx>-` slot
+                    // PRIMARY: the record names the fleet.
+                    Some(record_fleet) => record_fleet == c,
+                    // CORROBORATING: no record fleet — the `<fleet>-` slot
                     // prefix decides. Bare-name equality is NEVER enough.
                     None => slot_prefix_matches(&t.instance, c),
                 }
@@ -420,9 +420,9 @@ pub fn resolve_scope(scope: &DownScope, targets: &[ManagedTarget]) -> Vec<Manage
 }
 
 /// True iff the instance's slot (parallel id stripped) starts with
-/// `<ctx>-`. The trailing dash is what separates a real context prefix from
-/// a bare workload name that merely EQUALS the context (the ambiguity pin:
-/// context scope is keyed on record/slot-PREFIX, never bare-name equality).
+/// `<fleet>-`. The trailing dash is what separates a real fleet prefix from
+/// a bare workload name that merely EQUALS the fleet (the ambiguity pin:
+/// fleet scope is keyed on record/slot-PREFIX, never bare-name equality).
 fn slot_prefix_matches(instance: &str, ctx: &str) -> bool {
     crate::microsandbox::slots::slot_of_instance(instance)
         .strip_prefix(ctx)
@@ -430,22 +430,22 @@ fn slot_prefix_matches(instance: &str, ctx: &str) -> bool {
 }
 
 /// True iff `r` is commit-sha-shaped: exactly 40 hex chars. A sha does not
-/// imply a context (ADR 0032 addendum §Selection ladder: branch refs imply
-/// contexts; SHAS DO NOT).
+/// imply a fleet (ADR 0032 addendum §Selection ladder: branch refs imply
+/// fleets; SHAS DO NOT).
 pub fn is_sha_like_ref(r: &str) -> bool {
     r.len() == 40 && r.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Fail-closed validation of a `--config-ref` scope value (ADR 0032
 /// addendum §Down scope ladder): the ref must be BRANCH-shaped — a
-/// 40-hex sha is refused ("a sha does not imply a context") — and must
+/// 40-hex sha is refused ("a sha does not imply a fleet") — and must
 /// resolve against the config's KNOWN refs ([`known_config_refs`]); an
 /// unknown ref is a hard error LISTING the known refs.
 pub fn validate_config_ref(r: &str, known_refs: &[String]) -> Result<()> {
     if is_sha_like_ref(r) {
         anyhow::bail!(
-            "'{r}' looks like a commit sha; a sha does not imply a context — \
-             name a branch or use --context"
+            "'{r}' looks like a commit sha; a sha does not imply a fleet — \
+             name a branch or use --fleet"
         );
     }
     if known_refs.iter().any(|k| k == r) {
@@ -498,7 +498,7 @@ pub fn known_config_refs() -> Result<Vec<String>> {
 /// guessing a scope.
 pub fn resolve_cli_scope(
     all: bool,
-    context: Option<&str>,
+    fleet: Option<&str>,
     config_ref: Option<&str>,
     everything_count: u8,
 ) -> Result<DownScope> {
@@ -508,16 +508,16 @@ pub fn resolve_cli_scope(
     if let Some(r) = config_ref {
         return Ok(DownScope::ConfigRef(r.to_string()));
     }
-    if let Some(c) = context {
-        return Ok(DownScope::Context(c.to_string()));
+    if let Some(c) = fleet {
+        return Ok(DownScope::Fleet(c.to_string()));
     }
     if all {
         return Ok(DownScope::Config);
     }
     anyhow::bail!(
         "`down` needs exactly ONE scope selector — \
-         --all (config) | --context <ctx> | --config-ref <ref> | --everything --everything \
-         (ADR 0032 addendum §Down scope ladder: instance < workload < context < config-ref \
+         --all (config) | --fleet <name> | --config-ref <ref> | --everything --everything \
+         (ADR 0032 addendum §Down scope ladder: instance < workload < fleet < config-ref \
          < config < everything; per-workload down stays on `workload <name> down`)"
     )
 }
@@ -629,23 +629,23 @@ mod tests {
     }
 
     #[test]
-    fn resolve_context_includes_record_primary_match() {
+    fn resolve_fleet_includes_record_primary_match() {
         let targets = vec![target(
             "personal-litellm",
             Some("personal"),
             vec![Evidence::RegistryRecord],
         )];
-        let picked = resolve_scope(&DownScope::Context("personal".into()), &targets);
+        let picked = resolve_scope(&DownScope::Fleet("personal".into()), &targets);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].instance, "personal-litellm");
     }
 
     #[test]
-    fn resolve_context_slot_prefix_corroborates_without_record_context() {
+    fn resolve_fleet_slot_prefix_corroborates_without_record_context() {
         // Record ABSENT entirely: slot prefix corroborates.
         let targets = vec![target("personal-pi", None, vec![Evidence::SlotPattern])];
         assert_eq!(
-            resolve_scope(&DownScope::Context("personal".into()), &targets).len(),
+            resolve_scope(&DownScope::Fleet("personal".into()), &targets).len(),
             1
         );
         // Record PRESENT but with a None (legacy) context: same verdict.
@@ -655,13 +655,13 @@ mod tests {
             vec![Evidence::RegistryRecord, Evidence::SlotPattern],
         )];
         assert_eq!(
-            resolve_scope(&DownScope::Context("personal".into()), &targets).len(),
+            resolve_scope(&DownScope::Fleet("personal".into()), &targets).len(),
             1
         );
     }
 
     #[test]
-    fn resolve_context_contradicting_record_excludes_despite_slot_match() {
+    fn resolve_fleet_contradicting_record_excludes_despite_slot_match() {
         // The slot prefix says personal-, but the RECORD (primary evidence)
         // names another context → excluded. Pinned.
         let targets = vec![target(
@@ -669,28 +669,28 @@ mod tests {
             Some("work"),
             vec![Evidence::RegistryRecord, Evidence::SlotPattern],
         )];
-        let picked = resolve_scope(&DownScope::Context("personal".into()), &targets);
+        let picked = resolve_scope(&DownScope::Fleet("personal".into()), &targets);
         assert!(picked.is_empty(), "record-primary exclusion failed");
     }
 
     #[test]
-    fn resolve_context_zero_matches_is_an_empty_ok_outcome() {
+    fn resolve_fleet_zero_matches_is_an_empty_ok_outcome() {
         let targets = vec![target(
             "work-pi",
             Some("work"),
             vec![Evidence::RegistryRecord],
         )];
-        let picked = resolve_scope(&DownScope::Context("nomans".into()), &targets);
+        let picked = resolve_scope(&DownScope::Fleet("nomans".into()), &targets);
         assert!(picked.is_empty(), "zero matches must resolve empty");
     }
 
-    /// AMBIGUITY PIN: a workload name that is ALSO a context name. Context
-    /// scope is keyed on RECORD context / slot PREFIX — never bare-name
+    /// AMBIGUITY PIN: a workload name that is ALSO a fleet name. Fleet
+    /// scope is keyed on RECORD fleet / slot PREFIX — never bare-name
     /// equality. The bare instance literally named `staging` (no record
-    /// context, no dash) is NOT matched by `--context staging`; the
-    /// `staging-staging` instance (workload named like its context) IS.
+    /// fleet, no dash) is NOT matched by `--fleet staging`; the
+    /// `staging-staging` instance (workload named like its fleet) IS.
     #[test]
-    fn resolve_context_disambiguates_bare_name_equal_to_context() {
+    fn resolve_fleet_disambiguates_bare_name_equal_to_fleet() {
         let targets = vec![
             // Bare singleton whose whole name equals the context name.
             target("staging", None, vec![Evidence::RegistryRecord]),
@@ -703,20 +703,20 @@ mod tests {
             // Different workload under the same context (prefix match only).
             target("staging-pi", None, vec![Evidence::SlotPattern]),
         ];
-        let picked = resolve_scope(&DownScope::Context("staging".into()), &targets);
+        let picked = resolve_scope(&DownScope::Fleet("staging".into()), &targets);
         let names: Vec<&str> = picked.iter().map(|t| t.instance.as_str()).collect();
         // Input order preserved; the bare "staging" singleton is excluded.
         assert_eq!(names, vec!["staging-staging", "staging-pi"]);
     }
 
     #[test]
-    fn resolve_context_ignores_unmanaged_candidates() {
+    fn resolve_fleet_ignores_unmanaged_candidates() {
         let targets = vec![target(
             "personal-foreign",
             None,
             vec![], // unmanaged
         )];
-        assert!(resolve_scope(&DownScope::Context("personal".into()), &targets).is_empty());
+        assert!(resolve_scope(&DownScope::Fleet("personal".into()), &targets).is_empty());
     }
 
     #[test]
@@ -755,9 +755,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_config_ref_behaves_as_context_of_the_branch() {
+    fn resolve_config_ref_behaves_as_fleet_of_the_branch() {
         // PURE half of the v1 pin: after validation, config-ref scope
-        // resolves exactly as the context the branch name implies.
+        // resolves exactly as the fleet the branch name implies.
         let targets = vec![
             target("feat-x-api", Some("feat-x"), vec![Evidence::RegistryRecord]),
             target("feat-x-pi", None, vec![Evidence::SlotPattern]),
@@ -772,7 +772,7 @@ mod tests {
 
     /// A record shaped like a per-dir source-gone instance (source_dir set
     /// to a path that no longer exists — irrelevant to down) must be
-    /// INCLUDED in context/config/everything resolutions. It is an ordinary
+    /// INCLUDED in fleet/config/everything resolutions. It is an ordinary
     /// record; this pins that a future filter cannot silently drop it.
     #[test]
     fn source_gone_record_is_included_in_every_resolution() {
@@ -785,9 +785,9 @@ mod tests {
         // with source_dir); resolution must not care either way.
         let targets = vec![gone];
         assert_eq!(
-            resolve_scope(&DownScope::Context("personal".into()), &targets).len(),
+            resolve_scope(&DownScope::Fleet("personal".into()), &targets).len(),
             1,
-            "context scope includes the source-gone record"
+            "fleet scope includes the source-gone record"
         );
         assert_eq!(resolve_scope(&DownScope::Config, &targets).len(), 1);
         assert_eq!(resolve_scope(&DownScope::Everything, &targets).len(), 1);
@@ -816,12 +816,12 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("does not imply a context"),
+            err.contains("does not imply a fleet"),
             "sha refusal must explain why: {err}"
         );
         assert!(
-            err.contains("--context"),
-            "sha refusal must point at --context: {err}"
+            err.contains("--fleet"),
+            "sha refusal must point at --fleet: {err}"
         );
     }
 
@@ -851,7 +851,7 @@ mod tests {
     fn resolve_cli_scope_maps_each_selector() {
         assert_eq!(
             resolve_cli_scope(false, Some("personal"), None, 0).unwrap(),
-            DownScope::Context("personal".into())
+            DownScope::Fleet("personal".into())
         );
         assert_eq!(
             resolve_cli_scope(false, None, Some("feat-x"), 0).unwrap(),
@@ -877,7 +877,7 @@ mod tests {
         let err = resolve_cli_scope(false, None, None, 0)
             .unwrap_err()
             .to_string();
-        for scope in ["--all", "--context", "--config-ref", "--everything"] {
+        for scope in ["--all", "--fleet", "--config-ref", "--everything"] {
             assert!(err.contains(scope), "error must list {scope}: {err}");
         }
     }
@@ -923,8 +923,8 @@ mod tests {
     #[test]
     fn scope_description_shapes() {
         assert_eq!(
-            DownScope::Context("personal".into()).description(),
-            "context 'personal'"
+            DownScope::Fleet("personal".into()).description(),
+            "fleet 'personal'"
         );
         assert_eq!(
             DownScope::ConfigRef("feat-x".into()).description(),
@@ -1129,7 +1129,7 @@ mod tests {
     /// SOURCE-GONE SWEEP PIN (packet item 7): a record shaped like a per-dir
     /// source-gone instance (source_dir recorded, the dir itself absent —
     /// irrelevant to down) enters the enumeration as an ORDINARY record and
-    /// survives into context/config/everything resolutions.
+    /// survives into fleet/config/everything resolutions.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime tests
     async fn enumerate_managed_includes_source_gone_record_in_all_resolutions() -> anyhow::Result<()>
@@ -1153,7 +1153,7 @@ mod tests {
         assert_eq!(managed[0].instance, "personal-mover");
 
         for scope in [
-            DownScope::Context("personal".into()),
+            DownScope::Fleet("personal".into()),
             DownScope::Config,
             DownScope::Everything,
         ] {
@@ -1176,7 +1176,7 @@ mod tests {
     /// sandbox dir named `msb_name_of_instance("personal-pi@canary")` are
     /// ONE physical target — enumerate_managed yields EXACTLY ONE target,
     /// carrying the WORKESTRATE identity (not the encoded name), with
-    /// RegistryRecord + ArtifactLog evidence stacked, and context scope
+    /// RegistryRecord + ArtifactLog evidence stacked, and fleet scope
     /// selects it. The log lives at the NEW state-dir location under the
     /// RAW `@` identity (ADR 0032 addendum 2026-08-30) — pinning that the
     /// state-dir probe needs no msb-name encoding — while the encoded
@@ -1232,8 +1232,8 @@ mod tests {
             "artifact evidence is found via the RAW-identity state-dir log"
         );
 
-        let picked = resolve_scope(&DownScope::Context("personal".into()), &managed);
-        assert_eq!(picked.len(), 1, "context scope selects the deduped target");
+        let picked = resolve_scope(&DownScope::Fleet("personal".into()), &managed);
+        assert_eq!(picked.len(), 1, "fleet scope selects the deduped target");
         assert_eq!(picked[0].instance, identity);
 
         let _ = std::fs::remove_dir_all(&state_dir);

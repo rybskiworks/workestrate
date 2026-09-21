@@ -46,7 +46,8 @@ egress = "deny"
 /// loads as a fleet layer through the real registry chain (the
 /// WORKESTRATE_FLEET_DIR bypass collects no operator scope).
 const OPERATOR_REGISTRY_TOML: &str = r#"
-layers = ["cmd-policy"]
+[settings]
+default_fleet = "cmd-policy"
 
 [policy.mounts.read]
 deny = [{ pattern = ".workestrate/", final = true }]

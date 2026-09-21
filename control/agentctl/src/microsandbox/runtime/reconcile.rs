@@ -211,7 +211,7 @@ pub(crate) fn context_drift(
 }
 
 /// A1/P3: warn (never fail) when an adopted record's context disagrees with
-/// the invocation's active context. Thin stderr wrapper over the pure
+/// the invocation's active fleet. Thin stderr wrapper over the pure
 /// [`context_drift`] decision; silent when there is no drift.
 pub(crate) fn warn_on_context_drift(
     instance: &str,
@@ -220,7 +220,7 @@ pub(crate) fn warn_on_context_drift(
 ) {
     if let Some((recorded, active)) = context_drift(record_context, active_context) {
         eprintln!(
-            "warning: instance '{}' was registered in context '{}' but the active context is '{}'; \
+            "warning: instance '{}' was registered under context '{}' but the active fleet is '{}'; \
              proceeding (registry record context is informational only)",
             instance, recorded, active
         );

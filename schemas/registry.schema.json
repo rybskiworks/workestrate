@@ -1,16 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Registry",
-  "description": "Schema root of the config `registry.toml`: global `[settings]`, the registered fleets (`fleets`), the default layer stack (`layers`), named contexts (`contexts`), and the trusted-project list. Written atomically by `config::save_registry`.",
+  "description": "Schema root of the config `registry.toml`: global `[settings]`, the registered fleets (`fleets`), the default layer stack (`layers`), and the trusted-project list. Written atomically by `config::save_registry`.",
   "type": "object",
   "properties": {
-    "contexts": {
-      "default": {},
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/Context"
-      }
-    },
     "fleets": {
       "default": {},
       "type": "object",
@@ -44,7 +37,7 @@
     "settings": {
       "default": {
         "config_version": null,
-        "default_context": null,
+        "default_fleet": null,
         "image_keep_last": null,
         "state_dir": null,
         "store_dir": null
@@ -81,20 +74,6 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/PolicyValue_for_String"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "Context": {
-      "description": "A named context in the registry (`[contexts.<name>]`): an ordered list of config-layer names merged (earlier = lower precedence) when the context is active.",
-      "type": "object",
-      "properties": {
-        "layers": {
-          "default": [],
-          "type": "array",
-          "items": {
-            "type": "string"
           }
         }
       },
@@ -642,7 +621,7 @@
       "additionalProperties": false
     },
     "RegistrySettings": {
-      "description": "Tool-wide settings section of the config `registry.toml` (`[settings]`). `default_context` selects the active context when none is given; `store_dir`/`state_dir` override the derived store/state locations.",
+      "description": "Tool-wide settings section of the config `registry.toml` (`[settings]`). `default_fleet` selects the active fleet when none is given; `store_dir`/`state_dir` override the derived store/state locations.",
       "type": "object",
       "properties": {
         "config_version": {
@@ -655,7 +634,7 @@
           "format": "uint32",
           "minimum": 0.0
         },
-        "default_context": {
+        "default_fleet": {
           "type": [
             "string",
             "null"

@@ -1266,7 +1266,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             super::reconcile::warn_on_context_drift(
                 &spec.instance,
                 facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                crate::config::active_context_name().as_deref(),
+                crate::config::active_fleet_name().as_deref(),
             );
             // ADR 0030 V-addendum §V4 wired (ADR 0032 A3): compare the
             // reused instance's recorded config stamp against the CURRENT
@@ -1331,7 +1331,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
             super::reconcile::warn_on_context_drift(
                 &spec.instance,
                 facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                crate::config::active_context_name().as_deref(),
+                crate::config::active_fleet_name().as_deref(),
             );
             // The policy dir may be gone (an earlier `down` removed it while
             // the sandbox was stopped); `handle.start()` re-loads the policy,
@@ -1721,7 +1721,7 @@ pub async fn up_service_with_spec<W: Workload>(
                 super::reconcile::warn_on_context_drift(
                     &spec.instance,
                     facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                    crate::config::active_context_name().as_deref(),
+                    crate::config::active_fleet_name().as_deref(),
                 );
                 // ADR 0032 A3 — the PARENT-side skew site (closes the
                 // per-dir landed note: this short-circuit is the ONLY path

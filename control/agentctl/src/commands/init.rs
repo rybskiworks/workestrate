@@ -1,57 +1,12 @@
-//! Bootstrap commands: `workestrate init` (DEPRECATED registry seed —
-//! replaced by `workestrate config init`; the legacy `[url]` dotfiles-clone
-//! positional now errors in favor of `workestrate config clone <src>`) and
-//! `workestrate workload new` (workload scaffold), plus the
-//! reference-fixture walker shared with `fleet new --from-reference`.
+//! Bootstrap commands: `workestrate workload new` (workload scaffold),
+//! plus the reference-fixture walker shared with `fleet new
+//! --from-reference`.
 
 use std::io::Write;
 
 use anyhow::Result;
 
 use crate::config;
-
-pub fn cmd_init(url: Option<&str>) -> Result<()> {
-    if url.is_some() {
-        anyhow::bail!(
-            "`workestrate init <url>` (dotfiles clone) is no longer supported; \
-             use `workestrate config clone <src>` to provision a config from an existing one"
-        );
-    }
-    eprintln!(
-        "warning: `workestrate init` is deprecated; use `workestrate config init` \
-         (or `workestrate config clone <src>`)"
-    );
-
-    let registry_path = config::registry_path();
-    if registry_path.exists() {
-        println!(
-            "Registry already exists at {}; use 'workestrate fleet add' to add repos",
-            registry_path.display()
-        );
-        return Ok(());
-    }
-
-    let mut registry = config::Registry::default();
-    registry.settings.default_context = Some("personal".to_string());
-
-    // Seed the store (fleets/sources) and state roots for the active
-    // layout.
-    // Legacy XDG: resolve_store_dir() == xdg_data_dir(), resolve_state_dir()
-    //   == xdg_state_dir() — identical to the pre-ADR-0023 mkdirs.
-    // New single-config: <config>/fleets, <config>/sources, <config>/state.
-    std::fs::create_dir_all(config::resolve_store_dir().join("fleets"))?;
-    std::fs::create_dir_all(config::resolve_store_dir().join("sources"))?;
-    std::fs::create_dir_all(config::resolve_state_dir())?;
-
-    config::save_registry(&registry)?;
-
-    println!(
-        "Initialized workestrate registry at {}",
-        registry_path.display()
-    );
-    println!("Run 'workestrate fleet add <url> personal' to add your fleet");
-    Ok(())
-}
 
 /// Validate a workload name for `workestrate new`. Closes review finding A20.
 ///
@@ -365,57 +320,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("no active fleet") || err.contains("workestrate init"),
-            "error should mention 'no active fleet' or 'workestrate init'; got: {err}"
+            err.contains("no active fleet") || err.contains("workestrate config init"),
+            "error should mention 'no active fleet' or 'workestrate config init'; got: {err}"
         );
-    }
-
-    // ---- W6a: deprecated `workestrate init` behavior ----
-
-    /// `workestrate init <url>` (the legacy dotfiles-clone flow) is removed:
-    /// passing a url is a hard error that names the replacement command.
-    #[test]
-    fn cmd_init_with_url_errors_and_names_config_clone() {
-        let result = cmd_init(Some("https://example.invalid/dotfiles.git"));
-        assert!(result.is_err(), "init <url> must error");
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("config clone"),
-            "error must name `workestrate config clone`: {err}"
-        );
-        assert!(
-            err.contains("no longer supported"),
-            "error must state the dotfiles flow is unsupported: {err}"
-        );
-    }
-
-    /// Bare `workestrate init` (deprecated shim) still seeds a registry with
-    /// default_context "personal" in a fresh config.
-    // ENV_TEST_LOCK held for the whole body: this test mutates process env
-    // and must not race any other env-mutating test.
-    #[test]
-    fn cmd_init_bare_seeds_registry_with_personal_default() -> Result<()> {
-        let _env_lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        let _g = crate::config::test_support::EnvGuard::capture(
-            crate::config::test_support::CONFIG_ENV_KEYS,
-        );
-
-        let config_dir = crate::config::test_support::uniq_dir("w6a-init-bare");
-        std::fs::create_dir_all(&config_dir)?;
-        // SAFETY: serialized by ENV_TEST_LOCK (held by this test / guard / caller).
-        unsafe { std::env::set_var("WORKESTRATE_CONFIG", &config_dir) };
-
-        cmd_init(None)?;
-
-        let registry = config::load_registry()?.expect("registry must exist after init");
-        assert_eq!(
-            registry.settings.default_context.as_deref(),
-            Some("personal"),
-            "bare init must seed default_context = \"personal\""
-        );
-
-        let _ = std::fs::remove_dir_all(&config_dir);
-        Ok(())
     }
 
     // ---- FS-17: cmd_new TOCTOU ----

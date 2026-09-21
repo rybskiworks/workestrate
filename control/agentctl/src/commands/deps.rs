@@ -9,7 +9,7 @@
 //! Two layers:
 //!
 //! - PURE PLANNING ([`plan_dep_starts`], [`plan_bare_up`]): given the merged
-//!   config, the port-registry records, and the active context, decide WHAT
+//!   config, the port-registry records, and the active fleet, decide WHAT
 //!   would start — no KVM, no spawn, unit-testable. Occupied singleton slot
 //!   = SATISFIED (record-as-authoritative, matching `depgraph`; never
 //!   restart a running dep). A dep named in `--use` is NEVER auto-started
@@ -573,7 +573,7 @@ pub async fn auto_start_dependencies(
     if workload.depends_on.is_empty() {
         return Ok(Vec::new());
     }
-    let context = crate::config::active_context_name();
+    let context = crate::config::active_fleet_name();
     let state_dir = crate::config::resolve_state_dir();
     let records = list_records(&state_dir)?;
     // ADR 0030 Phase 2 T1: the dependent's declaring-repo namespace scopes
@@ -675,12 +675,12 @@ pub async fn auto_start_dependencies(
         match disposition {
             DepDisposition::Reuse { dep, slot } => {
                 // A1/P3: adopting a record registered under a different
-                // context than the active one is allowed but surfaced
+                // fleet than the active one is allowed but surfaced
                 // (warn-and-proceed).
                 crate::microsandbox::runtime::reconcile::warn_on_context_drift(
                     &slot,
                     facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                    crate::config::active_context_name().as_deref(),
+                    crate::config::active_fleet_name().as_deref(),
                 );
                 println!("dependency '{dep}' already running (slot '{slot}') — reusing");
             }
@@ -779,7 +779,7 @@ fn dep_port_auto(config: &ConfigFile, dep: &str, target_instance: &str) -> bool 
 }
 
 /// Bare `workestrate workload up` (EXECUTOR — KVM-dependent at runtime):
-/// topo-ordered start of ALL service-kind workloads in the active context,
+/// topo-ordered start of ALL service-kind workloads in the active fleet,
 /// detached, singleton slots. Agent-kind workloads are printed as SKIPPED;
 /// an occupied slot is already running (skip, NOT an error).
 ///
@@ -817,7 +817,7 @@ fn dep_port_auto(config: &ConfigFile, dep: &str, target_instance: &str) -> bool 
 /// batch before anything starts.
 pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> {
     let config = crate::config::load_config()?;
-    let context = crate::config::active_context_name();
+    let context = crate::config::active_fleet_name();
     let state_dir = crate::config::resolve_state_dir();
     let records = list_records(&state_dir)?;
     let (starts, skips) = plan_bare_up(&config, &records, context.as_deref())?;
@@ -847,12 +847,12 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 match decide_bare_up_disposition(&chain, &facts, &slot) {
                     Ok(BareUpDisposition::Reuse) => {
                         // A1/P3: adopting a record registered under a
-                        // different context than the active one is allowed
+                        // different fleet than the active one is allowed
                         // but surfaced (warn-and-proceed).
                         crate::microsandbox::runtime::reconcile::warn_on_context_drift(
                             &slot,
                             facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                            crate::config::active_context_name().as_deref(),
+                            crate::config::active_fleet_name().as_deref(),
                         );
                         if !json {
                             println!("{name}: already running (slot '{slot}') — reusing");
@@ -930,12 +930,12 @@ pub async fn cmd_workload_up_all(json: bool, reload_images: bool) -> Result<()> 
                 // would reuse anyway, but spawning it would misreport within
                 // the FS-8 grace window.
                 // A1/P3: adopting a record registered under a different
-                // context than the active one is allowed but surfaced
+                // fleet than the active one is allowed but surfaced
                 // (warn-and-proceed); with no record this is silent.
                 crate::microsandbox::runtime::reconcile::warn_on_context_drift(
                     &s.slot,
                     facts.record.as_ref().and_then(|r| r.context.as_deref()),
-                    crate::config::active_context_name().as_deref(),
+                    crate::config::active_fleet_name().as_deref(),
                 );
                 if !json {
                     println!("{}: already running (slot '{}') — reusing", s.name, s.slot);
@@ -1110,7 +1110,7 @@ async fn start_service_detached(name: &str, preflight: EnsurePreflight) -> Resul
 /// `images_ready = true`, and `detach_args` appends `--images-ready` so the
 /// child skips the pre-flight. `detach_args` likewise forwards `--instance
 /// <id>` for a parallel target, so the child re-derives the SAME instance
-/// name from its own context.
+/// name from its own fleet.
 ///
 /// PORTS (ADR 0030 P2.1, LOCKED precedence): callers pass `port_auto =
 /// true` for scoped/fresh dep instances (auto-allocate via the host=0
@@ -2639,7 +2639,7 @@ guest = 4000
         toml::from_str(toml).expect("scoped fixture must parse")
     }
 
-    /// Register a PARALLEL lifecycle record `<context>-<workload>@<id>` in
+    /// Register a PARALLEL lifecycle record `<fleet>-<workload>@<id>` in
     /// the "default" namespace.
     fn register_parallel(
         state_dir: &Path,

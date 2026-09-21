@@ -180,22 +180,18 @@ fn init_with_positional_dest_is_a_usage_error() {
 }
 
 #[test]
-fn init_with_fleet_and_positional_dest_is_a_usage_error() {
+fn init_rejects_positional_dest_even_with_global_fleet() {
     let home = IsolatedHome::new("cmd-config-prov");
+    // `--fleet` is the global fleet-selection flag; it parses here, but
+    // `config init` still takes no positional dest.
     let out = home
         .cmd()
-        .args([
-            "config",
-            "init",
-            "--fleet",
-            "https://example.invalid/x.git",
-            "/tmp/some-dest",
-        ])
+        .args(["config", "init", "--fleet", "work", "/tmp/some-dest"])
         .output()
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "config init --fleet + positional dest must be rejected by clap"
+        "config init --fleet work <positional> must be rejected by clap"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -205,41 +201,18 @@ fn init_with_fleet_and_positional_dest_is_a_usage_error() {
 }
 
 #[test]
-fn init_with_name_and_positional_dest_is_a_usage_error() {
+fn init_with_name_flag_is_a_usage_error() {
     let home = IsolatedHome::new("cmd-config-prov");
+    // The former `config init --name` scaffolding flag is retired; clap must
+    // reject it as an unknown argument.
     let out = home
         .cmd()
-        .args(["config", "init", "--name", "work", "/tmp/some-dest"])
+        .args(["config", "init", "--name", "work"])
         .output()
         .expect("invoke");
     assert!(
         !out.status.success(),
-        "config init --name + positional dest must be rejected by clap"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("error:") && stderr.contains("unexpected argument"),
-        "clap must report an unexpected argument; stderr=\n{stderr}"
-    );
-}
-
-#[test]
-fn clone_with_fleet_is_a_usage_error() {
-    let home = IsolatedHome::new("cmd-config-prov");
-    let out = home
-        .cmd()
-        .args([
-            "config",
-            "clone",
-            "--fleet",
-            "https://example.invalid/x.git",
-            "/tmp/whatever",
-        ])
-        .output()
-        .expect("invoke");
-    assert!(
-        !out.status.success(),
-        "config clone --fleet must be rejected by clap"
+        "config init --name must be rejected by clap"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

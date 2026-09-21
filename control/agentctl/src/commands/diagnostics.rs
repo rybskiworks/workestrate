@@ -37,7 +37,7 @@ pub fn cmd_plan<W: crate::microsandbox::workload::Workload>(
     let mut plan = effective.plan();
     if let Some(id) = instance {
         validate_instance_id(id)?;
-        let slot = slot_for(workload.name(), config::active_context_name().as_deref());
+        let slot = slot_for(workload.name(), config::active_fleet_name().as_deref());
         plan.name = instance_name(&slot, Some(id));
         let state_dir = config::resolve_state_dir();
         let bind = crate::microsandbox::port_registry::prospective_loopback_ip(&state_dir)?;
@@ -84,10 +84,10 @@ pub struct WorkloadListEntry {
     pub instances: Vec<String>,
     /// The workload's declaring fleet namespace (ADR 0030 Phase 2 T1).
     pub namespace: String,
-    /// The active context at listing time (G5): the same for every row —
-    /// the listing is the active context's config view. None under
+    /// The active fleet at listing time (G5): the same for every row —
+    /// the listing is the active fleet's config view. None under
     /// bare-layers backward-compat.
-    pub context: Option<String>,
+    pub fleet: Option<String>,
     /// The workload's declared instance strategy (from config; "singleton"
     /// default).
     pub strategy: String,
@@ -160,9 +160,9 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
     names.sort();
     let provenance = crate::merge::get_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-    // G5: the listing is the active context's config view — one value for
+    // G5: the listing is the active fleet's config view — one value for
     // every row.
-    let active_context = crate::config::active_context_name();
+    let active_fleet = crate::config::active_fleet_name();
     let entries: Vec<WorkloadListEntry> = names
         .into_iter()
         .map(|name| {
@@ -184,7 +184,7 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
                     &layer_dirs,
                     name,
                 ),
-                context: active_context.clone(),
+                fleet: active_fleet.clone(),
                 strategy,
                 on_conflict,
                 port,
@@ -225,7 +225,7 @@ pub fn print_workloads_text_to<W: std::io::Write>(
             .as_deref()
             .map(|l| format!(" label={l}"))
             .unwrap_or_default();
-        let context = e.context.as_deref().unwrap_or("-");
+        let fleet = e.fleet.as_deref().unwrap_or("-");
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}{}",
@@ -234,7 +234,7 @@ pub fn print_workloads_text_to<W: std::io::Write>(
             e.image,
             running,
             e.namespace,
-            context,
+            fleet,
             e.strategy,
             e.on_conflict,
             e.port,
@@ -694,18 +694,18 @@ pub fn cmd_check() -> Result<()> {
         all_ok = false;
     }
 
-    // Active context
-    match config::resolve_active_context() {
-        Ok(ctx) => {
-            if let Some(ref name) = ctx.name {
-                println!("Active context: {} [OK]", name);
+    // Active fleet
+    match config::resolve_active_fleet() {
+        Ok(active) => {
+            if let Some(ref name) = active.name {
+                println!("Active fleet: {} [OK]", name);
             } else {
-                println!("Active context: (none — using bare layers)");
+                println!("Active fleet: (none — using bare layers)");
             }
-            println!("  Layers: {:?}", ctx.layers);
+            println!("  Layers: {:?}", active.layers);
         }
         Err(e) => {
-            println!("Active context: [ERROR] {}", e);
+            println!("Active fleet: [ERROR] {}", e);
             all_ok = false;
         }
     }
@@ -2242,7 +2242,7 @@ mod tests {
     }
 
     /// `workloads --json` includes the policy + namespace columns (ADR 0030
-    /// §4.4) and omits the label when None. G5: the context field is always
+    /// §4.4) and omits the label when None. G5: the fleet field is always
     /// serialized (null when None), matching the PsEntryJson.context
     /// convention.
     #[test]
@@ -2253,7 +2253,7 @@ mod tests {
             image: "litellm:main".to_string(),
             instances: vec!["personal-litellm".to_string()],
             namespace: "default".to_string(),
-            context: Some("personal".to_string()),
+            fleet: Some("personal".to_string()),
             strategy: "singleton".to_string(),
             on_conflict: "reuse,start,replace".to_string(),
             port: "fixed".to_string(),
@@ -2263,7 +2263,7 @@ mod tests {
             .expect("serialize workloads");
         let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
         assert_eq!(value[0]["namespace"], "default");
-        assert_eq!(value[0]["context"], "personal");
+        assert_eq!(value[0]["fleet"], "personal");
         assert_eq!(value[0]["strategy"], "singleton");
         assert_eq!(value[0]["on_conflict"], "reuse,start,replace");
         assert_eq!(value[0]["port"], "fixed");
@@ -2271,23 +2271,23 @@ mod tests {
             value[0].get("label").is_none(),
             "label must be omitted; got:\n{json}"
         );
-        // context is ALWAYS serialized (null when None) — never omitted.
-        let none_context = vec![WorkloadListEntry {
-            context: None,
+        // fleet is ALWAYS serialized (null when None) — never omitted.
+        let none_fleet = vec![WorkloadListEntry {
+            fleet: None,
             ..entries[0].clone()
         }];
-        let json = serde_json::to_string_pretty(&crate::json_out::workloads_json(&none_context))
+        let json = serde_json::to_string_pretty(&crate::json_out::workloads_json(&none_fleet))
             .expect("serialize workloads");
         let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
         assert!(
-            value[0].get("context").is_some(),
-            "context must be present even when None; got:\n{json}"
+            value[0].get("fleet").is_some(),
+            "fleet must be present even when None; got:\n{json}"
         );
-        assert_eq!(value[0]["context"], serde_json::Value::Null);
+        assert_eq!(value[0]["fleet"], serde_json::Value::Null);
     }
 
     /// `workloads` text output includes the policy + namespace columns (ADR
-    /// 0030 §4.4) plus the G5 context column after namespace (`-` when None).
+    /// 0030 §4.4) plus the G5 fleet column after namespace (`-` when None).
     #[test]
     fn print_workloads_text_includes_policy_columns() {
         let entries = vec![WorkloadListEntry {
@@ -2296,7 +2296,7 @@ mod tests {
             image: "litellm:main".to_string(),
             instances: vec!["personal-litellm".to_string()],
             namespace: "default".to_string(),
-            context: Some("personal".to_string()),
+            fleet: Some("personal".to_string()),
             strategy: "singleton".to_string(),
             on_conflict: "reuse,start,replace".to_string(),
             port: "fixed".to_string(),
@@ -2305,33 +2305,33 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         print_workloads_text_to(&entries, &mut buf).expect("render workloads text");
         let out = String::from_utf8(buf).expect("utf8");
-        // Byte-exact row: name, kind, image, running, namespace, context,
+        // Byte-exact row: name, kind, image, running, namespace, fleet,
         // strategy, on_conflict, port, label.
         assert_eq!(
             out,
             "litellm\tservice\tlitellm:main\trunning: personal-litellm\tdefault\tpersonal\tsingleton\treuse,start,replace\tfixed label=v1\n",
             "workloads text row drifted; got:\n{out}"
         );
-        // None context renders `-`.
-        let none_context = vec![WorkloadListEntry {
+        // None fleet renders `-`.
+        let none_fleet = vec![WorkloadListEntry {
             name: "pi".to_string(),
             kind: "service".to_string(),
             image: "pi:main".to_string(),
             instances: vec![],
             namespace: "default".to_string(),
-            context: None,
+            fleet: None,
             strategy: "singleton".to_string(),
             on_conflict: "reuse,start,replace".to_string(),
             port: "fixed".to_string(),
             label: None,
         }];
         let mut buf: Vec<u8> = Vec::new();
-        print_workloads_text_to(&none_context, &mut buf).expect("render workloads text");
+        print_workloads_text_to(&none_fleet, &mut buf).expect("render workloads text");
         let out = String::from_utf8(buf).expect("utf8");
         assert_eq!(
             out,
             "pi\tservice\tpi:main\t(none running)\tdefault\t-\tsingleton\treuse,start,replace\tfixed\n",
-            "None context must render `-`; got:\n{out}"
+            "None fleet must render `-`; got:\n{out}"
         );
     }
 }

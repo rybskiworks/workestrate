@@ -252,7 +252,7 @@ fn plan_does_not_resolve_or_print_secrets_and_preserves_delivery_policy() {
 }
 
 #[test]
-fn explicit_context_and_home_are_preserved_in_env_mode() {
+fn explicit_fleet_and_home_are_preserved_in_env_mode() {
     let fixture = Fixture::new();
     let work_home = fixture.home.dir.join("work-home");
     std::fs::create_dir_all(&work_home).unwrap();
@@ -261,11 +261,9 @@ fn explicit_context_and_home_are_preserved_in_env_mode() {
         format!(
             r#"
 [settings]
-default_context = "selected"
+default_fleet = "local"
 [fleets.local]
 url = "{}"
-[contexts.selected]
-layers = ["local"]
 "#,
             fixture.config.display()
         ),
@@ -274,23 +272,23 @@ layers = ["local"]
     let out = fixture
         .cmd()
         .env_remove("WORKESTRATE_FLEET_DIR")
-        .env("GH_TOKEN", "synthetic-context")
+        .env("GH_TOKEN", "synthetic-fleet")
         .args([
             "--secrets-source",
             "env",
             "--config",
             work_home.to_str().unwrap(),
-            "--context",
-            "selected",
+            "--fleet",
+            "local",
             "run",
             "--",
             "sh",
             "-c",
-            "test \"$MACHINE_GITHUB_TOKEN\" = synthetic-context && printf 'context\\n'",
+            "test \"$MACHINE_GITHUB_TOKEN\" = synthetic-fleet && printf 'fleet\\n'",
         ])
         .output()
         .unwrap();
-    assert_eq!(success(out), "context\n");
+    assert_eq!(success(out), "fleet\n");
     fixture.no_external_commands();
 }
 

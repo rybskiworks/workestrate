@@ -306,7 +306,7 @@ gating_file = "package-lock.json"
     /// form only when no context/override leaks from a parallel test).
     fn pin_no_tag_context() -> std::sync::MutexGuard<'static, ()> {
         let lock = ENV_TEST_LOCK.lock().unwrap();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         crate::config::clear_inline_override();
         lock
     }
@@ -672,14 +672,14 @@ gating_file = "package-lock.json"
     /// `<attr>:<active-ctx>.<sha>` (dot separator) and moves the
     /// `(repo, attr, Some(ctx))` pointer — never a ctx-less tag or a
     /// ctx-less pointer while a config context is active (ADR 0032 §Image
-    /// tags: image_tag_context = active_context_name when no override is
+    /// tags: image_tag_context = active_fleet_name when no override is
     /// armed).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
     async fn active_context_ensure_writes_ctx_tag_and_ctx_pointer() -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
@@ -735,7 +735,7 @@ gating_file = "package-lock.json"
         assert!(builder.calls.is_empty() && loader.calls.is_empty());
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())
@@ -753,7 +753,7 @@ gating_file = "package-lock.json"
     -> Result<()> {
         let _lock = ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
@@ -824,7 +824,7 @@ gating_file = "package-lock.json"
         );
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&state_dir);
         Ok(())

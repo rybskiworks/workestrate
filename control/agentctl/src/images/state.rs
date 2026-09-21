@@ -82,33 +82,33 @@ pub const OUT_PATH_HASH_PREFIX_LEN: usize = 12;
 /// The tag context segment (ADR 0032 §Image tags): the ARMED inline-override
 /// config ref wins (A5 rung 3 — `prime:feat-x` builds
 /// `workestrate-prime:feat-x.<sha>` and moves ONLY the `(name, "feat-x")`
-/// pointer; the config context's pointer never flaps), else the active context
+/// pointer; the config context's pointer never flaps), else the active fleet
 /// name, else `None` (bare-layers mode → the ctx-less tag form).
 ///
 /// The armed override ref is SLUGIFIED via
-/// [`crate::config::registry::slugify_context_candidate`] before becoming
-/// the ctx segment — the SAME slug as the context candidate for the same
+/// [`crate::config::registry::slugify_fleet_candidate`] before becoming
+/// the ctx segment — the SAME slug as the fleet candidate for the same
 /// branch (`feat/x` → `feat-x`, `Foo#1.2` → `foo-1-2`), so raw branch names
 /// never inject illegal characters (`/`, `#`, `.`, uppercase) into image
 /// tags — the ctx segment NEVER contains a dot, keeping the `<ctx>.<sha>`
 /// split (at the LAST `.`) unambiguous. A
 /// ref that slugifies to `None` (no usable chars, e.g. `###`) falls back to
-/// the active context name — the registry ladder's None→falls-through
-/// convention. With no armed override the active context name is used
-/// verbatim (context names are already legal by derivation/validation).
+/// the active fleet name — the registry ladder's None→falls-through
+/// convention. With no armed override the active fleet name is used
+/// verbatim (fleet names are already legal by derivation/validation).
 ///
 /// The armed override is process-global and arms only for the invocation's
 /// own workload (deps are ensured BEFORE arming — see
 /// `commands::deps` / main.rs), so no workload-name filter is applied here.
 pub fn image_tag_context() -> Option<String> {
     if let Some((_workload, config_ref)) = crate::config::inline_ref::armed_inline_override()
-        && let Some(slug) = crate::config::registry::slugify_context_candidate(&config_ref)
+        && let Some(slug) = crate::config::registry::slugify_fleet_candidate(&config_ref)
     {
         return Some(slug);
     }
     // No usable characters (e.g. `###`) → fall through to the active
-    // context name (the registry ladder's None→falls-through convention).
-    crate::config::active_context_name()
+    // fleet name (the registry ladder's None→falls-through convention).
+    crate::config::active_fleet_name()
 }
 
 /// Extract the sha segment for a computed tag: the first
@@ -138,7 +138,7 @@ pub fn store_hash_prefix(out_path: &str) -> Option<String> {
 /// split at the FIRST `:` (dots in a flake-attr name are legal and
 /// harmless), the sha segment ([`OUT_PATH_HASH_PREFIX_LEN`] lowercase
 /// base32 chars) NEVER contains a dot, and the ctx segment never does
-/// either ([`crate::config::registry::slugify_context_candidate`] collapses
+/// either ([`crate::config::registry::slugify_fleet_candidate`] collapses
 /// every non-alphanumeric run — including dots — to dashes), so the tag
 /// segment splits at the LAST `.`. The whole string satisfies the docker
 /// tag grammar (`[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`) — pinned by
@@ -713,7 +713,7 @@ mod tests {
         let cases: Vec<(&str, Option<&str>)> = vec![
             // ctx-less (bare-layers mode).
             ("workestrate-prime", None),
-            // Plain ctx (active context name).
+            // Plain ctx (active fleet name).
             ("workestrate-prime", Some("personal")),
             // Slugified branch ctx with dashes.
             ("workestrate-prime", Some("migration-tool-model")),
@@ -838,7 +838,7 @@ mod tests {
     #[test]
     fn pointer_round_trip_and_resolution_preference() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         crate::config::clear_inline_override();
         let state_dir = unique_state_dir("images-pointers");
         let mut state = ImagesState::default();
@@ -884,15 +884,15 @@ mod tests {
     }
 
     /// image_tag_context precedence: armed inline-override ref > active
-    /// context name > None.
+    /// fleet name > None.
     #[test]
-    fn image_tag_context_prefers_armed_override_then_active_context() {
+    fn image_tag_context_prefers_armed_override_then_active_fleet() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
-        assert_eq!(image_tag_context(), None, "no context, no override");
+        crate::config::set_active_fleet(None);
+        assert_eq!(image_tag_context(), None, "no active fleet, no override");
 
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
@@ -912,7 +912,7 @@ mod tests {
         );
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
     }
 
     /// The armed override ref is SLUGIFIED into the tag ctx segment: branch
@@ -923,7 +923,7 @@ mod tests {
     fn image_tag_context_slugifies_the_armed_override_ref() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
 
         for (raw, want) in [
             ("feat/x", "feat-x"),
@@ -942,63 +942,63 @@ mod tests {
         }
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
     }
 
     /// An armed override ref with NO usable characters (e.g. `###`) slugifies
-    /// to None and falls back to the active context name — the registry
-    /// ladder's None→falls-through convention; with no active context the
+    /// to None and falls back to the active fleet name — the registry
+    /// ladder's None→falls-through convention; with no active fleet the
     /// tag ctx is None.
     #[test]
-    fn image_tag_context_unslugifiable_override_falls_back_to_active_context() {
+    fn image_tag_context_unslugifiable_override_falls_back_to_active_fleet() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
 
         crate::config::set_pending_inline_override("prime", "###");
         crate::config::arm_inline_override();
         assert_eq!(
             image_tag_context(),
             None,
-            "### slugifies to None; no active context → None"
+            "### slugifies to None; no active fleet → None"
         );
 
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
         assert_eq!(
             image_tag_context().as_deref(),
             Some("personal"),
-            "### slugifies to None → falls back to the active context name"
+            "### slugifies to None → falls back to the active fleet name"
         );
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
     }
 
     /// Consistency: the tag ctx segment under an armed override is the SAME
-    /// slug the registry derives as the context candidate for the same
-    /// branch — tag ctx and context name never diverge for a given ref.
+    /// slug the registry derives as the fleet candidate for the same
+    /// branch — tag ctx and fleet name never diverge for a given ref.
     #[test]
     fn image_tag_context_matches_registry_slug_for_the_same_branch() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
 
         for branch in ["feat/x", "Foo#1.2", "migration/tool-model", "feat-x"] {
             crate::config::set_pending_inline_override("prime", branch);
             crate::config::arm_inline_override();
             assert_eq!(
                 image_tag_context(),
-                crate::config::registry::slugify_context_candidate(branch),
-                "tag ctx for {branch:?} equals the registry context-candidate slug"
+                crate::config::registry::slugify_fleet_candidate(branch),
+                "tag ctx for {branch:?} equals the registry fleet-candidate slug"
             );
             crate::config::clear_inline_override();
         }
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
     }
 
     /// Under an armed override, resolution moves to the OVERRIDE-ctx pointer
@@ -1007,7 +1007,7 @@ mod tests {
     fn resolve_image_tag_under_armed_override_uses_the_override_ctx_pointer() {
         let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
         crate::config::clear_inline_override();
-        crate::config::set_active_context(Some(crate::config::ActiveContext {
+        crate::config::set_active_fleet(Some(crate::config::ActiveFleet {
             name: Some("personal".to_string()),
             layers: vec!["personal".to_string()],
         }));
@@ -1029,7 +1029,7 @@ mod tests {
         );
         state.save(&state_dir).expect("save");
 
-        // Home context: the config-ctx pointer resolves.
+        // Home fleet: the config-ctx pointer resolves.
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "workestrate-prime", "latest"),
             "workestrate-prime:personal.111111111111"
@@ -1056,7 +1056,7 @@ mod tests {
         );
 
         crate::config::clear_inline_override();
-        crate::config::set_active_context(None);
+        crate::config::set_active_fleet(None);
         let _ = std::fs::remove_dir_all(&state_dir);
     }
 }
