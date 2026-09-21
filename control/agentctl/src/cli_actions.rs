@@ -361,16 +361,20 @@ pub enum WorkloadAction {
     /// drvPath change detection + the §3.4 skew matrix; the build/load
     /// pipeline itself is phase D). Omit the name for the batch form: all
     /// nix-layered workloads in the active fleet (mirrors the bare-up
-    /// grammar of the ADR 0021 addendum). `--fleet`/`--all-fleets` widen the
-    /// scope to registered fleets. NOT kind-routed — `main.rs`
-    /// dispatches it early like `workload new`.
+    /// grammar of the ADR 0021 addendum). `--fleet` (the shared fleet
+    /// selector, global or build-local) picks the fleet to build from;
+    /// `--all-fleets` widens the scope to every registered fleet. NOT
+    /// kind-routed — `main.rs` dispatches it early like `workload new`.
     Build {
         /// Workload name from the merged config. Omit for the batch form
         /// (all nix-layered workloads in the active fleet).
-        #[arg(conflicts_with_all = ["fleet", "all_fleets"])]
+        #[arg(conflicts_with_all = ["all_fleets"])]
         name: Option<String>,
 
-        /// Build all nix-layered workloads declared by one registered fleet.
+        /// Fleet to build from: with a name, the fleet the named workload is
+        /// resolved against; without one, build all nix-layered workloads
+        /// declared by that registered fleet. This is the same selector as
+        /// the global `--fleet` — either position works.
         #[arg(long, value_name = "FLEET", conflicts_with = "all_fleets")]
         fleet: Option<String>,
 
@@ -559,6 +563,7 @@ pub struct SecretsTargetArgs {
     /// registry; honors its store dir and per-fleet secrets_file/age_key_file
     /// overrides). The global --config flag selects the config the registry
     /// is read from — --config only makes sense together with --fleet.
+    /// Same selector as the global --fleet — either position works.
     #[arg(long, value_name = "NAME", conflicts_with_all = ["fleet_dir", "global"])]
     pub fleet: Option<String>,
 

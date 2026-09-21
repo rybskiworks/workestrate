@@ -2,8 +2,8 @@
 //! `scripts/test-setup-secrets.py`. Real sops/age crypto against disposable
 //! operator configs and freshly generated keys; the secret value is asserted to
 //! NEVER appear in stdout/stderr. Crypto-dependent tests skip (with a note)
-//! when `sops`/`age-keygen` are not on PATH so tool-less environments stay
-//! green.
+//! when `sops`/`age-keygen` are missing from PATH or cannot complete a real
+//! key generation, so tool-less or broken-tool environments stay green.
 
 #![allow(
     clippy::unwrap_used,
@@ -31,8 +31,34 @@ fn on_path(tool: &str) -> bool {
     })
 }
 
+/// Presence on PATH is not enough: an `age-keygen` can spawn yet fail at
+/// runtime (locked-down sandbox, missing entropy, broken binary). Probe a
+/// real key generation plus recipient derivation in a throwaway directory so
+/// a broken toolchain takes the skip path instead of panicking mid-test.
 fn crypto_tools_available() -> bool {
-    on_path("sops") && on_path("age-keygen")
+    if !on_path("sops") || !on_path("age-keygen") {
+        return false;
+    }
+    let probe_guard = TempDir::new("cmd-secrets-probe");
+    let probe_key = probe_guard.path().join("probe.key");
+    let generated = Command::new("age-keygen")
+        .arg("-o")
+        .arg(&probe_key)
+        .output();
+    let Ok(generated) = generated else {
+        return false;
+    };
+    if !generated.status.success() {
+        return false;
+    }
+    let derived = Command::new("age-keygen")
+        .arg("-y")
+        .arg(&probe_key)
+        .output();
+    match derived {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Skip helper: returns true (and the caller returns early) when the crypto
@@ -41,7 +67,7 @@ fn skip_without_crypto(test: &str) -> bool {
     if crypto_tools_available() {
         return false;
     }
-    eprintln!("skipping {test}: sops/age-keygen not on PATH");
+    eprintln!("skipping {test}: sops/age-keygen unavailable or nonfunctional");
     true
 }
 
@@ -73,7 +99,11 @@ impl Fixture {
             .arg(&key)
             .output()
             .expect("run age-keygen");
-        assert!(status.status.success(), "age-keygen failed");
+        assert!(
+            status.status.success(),
+            "age-keygen failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
         let fx = Self {
             root_guard,
             root,
@@ -93,7 +123,11 @@ impl Fixture {
             .arg(&self.key)
             .output()
             .expect("run age-keygen -y");
-        assert!(out.status.success());
+        assert!(
+            out.status.success(),
+            "age-keygen -y failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 

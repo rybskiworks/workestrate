@@ -97,6 +97,19 @@ fn absolutize(path: &Path) -> Result<PathBuf> {
 /// environment/cwd fallback ladder). Global mode creates its directory;
 /// every other mode requires an existing directory.
 fn resolve_target(args: &SecretsTargetArgs) -> Result<TargetSpec> {
+    // The global --fleet shares its clap arg id with the --fleet selector
+    // here (deliberately: it is the same fleet selector wherever it
+    // appears), but a value given BEFORE the subcommand bypasses the
+    // parse-time conflicts — enforce exclusivity explicitly so a mixed
+    // invocation can never silently pick the wrong secrets target.
+    let selector_count =
+        u8::from(args.global) + u8::from(args.fleet.is_some()) + u8::from(args.fleet_dir.is_some());
+    if selector_count > 1 {
+        anyhow::bail!(
+            "secrets target selectors are mutually exclusive — give exactly one of \
+             --fleet <name> | --fleet-dir <dir> | --global"
+        );
+    }
     if args.global {
         let dir = config::paths::xdg_config_dir();
         if !dir.is_dir() {
@@ -1246,6 +1259,42 @@ mod tests {
             !updated.contains("age1PLACEHOLDER"),
             "no placeholder survives: {updated}"
         );
+    }
+
+    /// Mixed target selectors are a usage error naming exclusivity. clap's
+    /// declared conflicts reject same-level pairs; this guard covers the
+    /// shapes clap cannot see — a global --fleet value propagated into the
+    /// target args plus a local --fleet-dir/--global — so a mixed
+    /// invocation can never silently pick the wrong secrets target.
+    #[test]
+    fn resolve_target_rejects_mixed_selectors() {
+        use std::path::PathBuf;
+        for args in [
+            SecretsTargetArgs {
+                fleet: Some("work".to_string()),
+                global: true,
+                ..Default::default()
+            },
+            SecretsTargetArgs {
+                fleet: Some("work".to_string()),
+                fleet_dir: Some(PathBuf::from("/tmp/workestrate-mixed")),
+                ..Default::default()
+            },
+            SecretsTargetArgs {
+                fleet_dir: Some(PathBuf::from("/tmp/workestrate-mixed")),
+                global: true,
+                ..Default::default()
+            },
+        ] {
+            let err = resolve_target(&args)
+                .err()
+                .expect("mixed selectors must error")
+                .to_string();
+            assert!(
+                err.contains("mutually exclusive"),
+                "{args:?} must name exclusivity: {err}"
+            );
+        }
     }
 
     #[test]

@@ -69,3 +69,48 @@ fn down_all_piped_no_aborts() {
         stderr
     );
 }
+
+/// The global `--fleet` shares its clap arg id with the down fleet rung:
+/// `--fleet work down` selects fleet scope in either flag position. On an
+/// empty state dir the fleet sweep is a no-op and succeeds.
+#[test]
+fn down_global_fleet_counts_as_the_fleet_rung() {
+    let home = IsolatedHome::new("cmd-down-shared-fleet");
+    let out = home
+        .cmd()
+        .args(["--fleet", "work", "down", "--yes"])
+        .output()
+        .expect("run down");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("internal error") && !stderr.contains("unreachable"),
+        "must never hit the clap arg-id clash panic: {stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "--fleet work down --yes on an empty state dir is a no-op sweep: {stderr}"
+    );
+}
+
+/// A propagated global `--fleet` plus a local rung bypasses the parse-time
+/// conflicts; resolve_cli_scope rejects the mixed shape with the
+/// one-selector usage error instead of silently picking a scope.
+#[test]
+fn down_global_fleet_plus_all_is_a_usage_error() {
+    let home = IsolatedHome::new("cmd-down-shared-fleet-conflict");
+    let out = home
+        .cmd()
+        .args(["--fleet", "work", "down", "--all"])
+        .output()
+        .expect("run down");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("internal error") && !stderr.contains("unreachable"),
+        "must never hit the clap arg-id clash panic: {stderr}"
+    );
+    assert!(!out.status.success(), "mixed shape must fail: {stderr}");
+    assert!(
+        stderr.contains("exactly ONE scope selector"),
+        "mixed shape must name the one-selector rule: {stderr}"
+    );
+}
