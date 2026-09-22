@@ -62,6 +62,7 @@ pub mod detect;
 pub mod ensure;
 pub mod gc;
 pub mod lock;
+mod nix_reference;
 pub mod pipeline;
 pub mod repo_key;
 pub mod skew;

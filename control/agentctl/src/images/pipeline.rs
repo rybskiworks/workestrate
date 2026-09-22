@@ -261,7 +261,7 @@ impl Default for NixCliBuilder {
 
 impl ImageBuilder for NixCliBuilder {
     fn build_out_path(&mut self, flake_root: &Path, attr: &str) -> Result<String, BuildError> {
-        let reference = format!("{}#{}", flake_root.display(), attr);
+        let reference = super::nix_reference::flake_reference(flake_root, attr);
         let spawn_failed = |detail: String| BuildError::Failed {
             reference: reference.clone(),
             detail,
