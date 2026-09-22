@@ -123,7 +123,8 @@ impl NixCliEvaluator {
         attr: &str,
         suffix: &str,
     ) -> Result<String, DrvEvalError> {
-        let reference = format!("{}#{}{}", flake_root.display(), attr, suffix);
+        let reference =
+            super::nix_reference::flake_reference(flake_root, &format!("{attr}{suffix}"));
         // `--extra-experimental-features` is passed EXPLICITLY (additive — a
         // user nix.conf that already enables them is unaffected) so the eval
         // is hermetic against the ambient nix config: the fixture tests run
