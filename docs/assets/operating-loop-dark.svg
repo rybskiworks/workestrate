@@ -1,31 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="236" viewBox="0 0 1200 236" role="img" aria-labelledby="title desc">
-  <title id="title">From intent to execution</title>
-  <desc id="desc">Define policy. Scope authority. Delegate work. Validate results. Feed observations back into the next declaration. This is an operating philosophy, not a claim that runtime acceptance is complete.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="310" viewBox="0 0 1200 310" role="img" aria-labelledby="title desc">
+  <title id="title">Your first Workestrate workspace</title>
+  <desc id="desc">Connect a fleet, inspect the resolved workloads, prepare credentials and the host, then run agents and services. Follow the setup guide for commands and checkpoints.</desc>
   <defs>
     <linearGradient id="ink" x1="44" y1="0" x2="1156" y2="0" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#80b5ff"/><stop offset=".3" stop-color="#f19a9e"/><stop offset=".65" stop-color="#f19a9e"/><stop offset="1" stop-color="#80b5ff"/>
+      <stop stop-color="#78a7ff"/><stop offset=".5" stop-color="#ee8fa9"/><stop offset="1" stop-color="#78a7ff"/>
     </linearGradient>
   </defs>
-  <rect x="1" y="1" width="1198" height="234" rx="18" fill="#0d1117" stroke="#293545"/>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="12" fill="#9baabd">
-    <text x="46" y="33" letter-spacing="1.4">an operating philosophy</text>
-    <text x="1154" y="33" text-anchor="end">evidence informs the next declaration</text>
+  <rect x="1" y="1" width="1198" height="308" rx="18" fill="#111821" stroke="#344052"/>
+  <text x="46" y="39" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#a5b3c7">from configuration to a running workspace</text>
+  <path d="M85 96H328m-7-5 7 5-7 5M369 96H612m-7-5 7 5-7 5M653 96H896m-7-5 7 5-7 5" fill="none" stroke="#344052" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#111821" stroke="url(#ink)" stroke-width="2">
+    <circle cx="64" cy="96" r="18"/><circle cx="348" cy="96" r="18"/><circle cx="632" cy="96" r="18"/><circle cx="916" cy="96" r="18"/>
   </g>
-  <path d="M85 83H316m-7-5 7 5-7 5M369 83H600m-7-5 7 5-7 5M653 83H884m-7-5 7 5-7 5" fill="none" stroke="#293545" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <g fill="#0d1117" stroke="#9baabd" stroke-width="1.5">
-    <circle cx="64" cy="83" r="18"/><circle cx="348" cy="83" r="18"/><circle cx="632" cy="83" r="18"/>
+  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="14" text-anchor="middle" fill="#edf2f7">
+    <text x="64" y="101">01</text><text x="348" y="101">02</text><text x="632" y="101">03</text><text x="916" y="101">04</text>
   </g>
-  <circle cx="916" cy="83" r="18" fill="#0d1117" stroke="url(#ink)" stroke-width="2"/>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="12" text-anchor="middle" fill="#9baabd">
-    <text x="64" y="87">01</text><text x="348" y="87">02</text><text x="632" y="87">03</text>
+  <g font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="700" letter-spacing="-1" fill="#edf2f7">
+    <text x="46" y="164">connect</text><text x="330" y="164">inspect</text><text x="614" y="164">prepare</text><text x="898" y="164">run</text>
   </g>
-  <path d="m908 83 5 5 11-11" fill="none" stroke="url(#ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <g font-family="Arial, Helvetica, sans-serif" font-size="39" font-weight="700" letter-spacing="-1" fill="#edf2f7">
-    <text x="46" y="147">define</text><text x="330" y="147">bound</text><text x="614" y="147">delegate</text><text x="898" y="147">validate</text>
+  <g font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#a5b3c7">
+    <text x="46" y="204">register your fleet</text><text x="330" y="204">review the plan</text><text x="614" y="204">credentials + host</text><text x="898" y="204">agents + services</text>
   </g>
-  <g font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#9baabd">
-    <text x="46" y="181">policy</text><text x="330" y="181">authority</text><text x="614" y="181">work</text>
-    <text x="898" y="181" fill="url(#ink)" font-weight="700">results</text>
-  </g>
-  <path d="M1109 111V202Q1109 214 1097 214H64Q52 214 52 202v-7m-5 6 5-6 5 6" fill="none" stroke="#293545" stroke-width="1.5" stroke-dasharray="3 5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46 242H1154" stroke="#344052"/>
+  <text x="46" y="281" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#a5b3c7">a guided setup for people and agents</text>
+  <text x="1154" y="281" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700" fill="#78a7ff">open the setup guide →</text>
 </svg>

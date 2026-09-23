@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
   <title id="title">workestrate / rybskiworks</title>
-  <desc id="desc">Systems that let software act. Declarative configuration feeds a shared control plane and individual agent and service microVMs. Conceptual responsibilities, not a network topology or a verified security claim.</desc>
+  <desc id="desc">Systems that let software act. Declarative configuration feeds a shared control plane and individual agent and service microVMs. Workestrate resolves configuration and manages the lifecycle of each workload.</desc>
   <defs>
     <linearGradient id="ink" x1="44" y1="0" x2="1156" y2="0" gradientUnits="userSpaceOnUse">
       <stop stop-color="#255bbd"/><stop offset=".3" stop-color="#b3435d"/><stop offset=".65" stop-color="#b3435d"/><stop offset="1" stop-color="#255bbd"/>
