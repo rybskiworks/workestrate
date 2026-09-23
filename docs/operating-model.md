@@ -271,8 +271,11 @@ canonical invocation cwd: last path component slugged (lowercased, separator run
 ≤23 chars) plus the first 8 hex chars of an FNV-1a 64 hash of the full
 canonical path. The same directory produces the same id; hashing the full
 path distinguishes directories with equal basenames.
-State mounts are instance-scoped: the declared state root gains the
-instance-key segment, so two per-dir instances never share state.
+Mount hosts and seed targets at or below `workspaces/<workload>-state` gain
+the instance-key segment immediately after that root. Other paths, including
+`workspaces/<fleet>/<workload>-state`, remain unchanged and can be shared by
+multiple instances. Use the supported state-root layout and verify both mount
+and seed destinations before running instances concurrently.
 Source-gone semantics: the record persists (with `source_dir` recorded at
 create) when the directory disappears; such records are ordinary members
 of applicable down sweeps. The parent-side staleness comparison applies
