@@ -1,40 +1,19 @@
 # Getting started
 
-This guide takes an operator from a fresh host to a running workload. A **fleet**
-provides workload definitions, image builds, policies, and encrypted secrets.
-Your **config** keeps the fleet registry, local overrides, and Workestrate state.
+Connect a fleet, inspect its plan, and start a workload. A **fleet** supplies
+workload definitions, image builds, policies, and encrypted secrets. Your
+**config** registers the fleets you use and keeps local overrides and state.
 
-You need x86_64 Linux, Git, and Nix with `nix-command` and `flakes` enabled.
-Running workloads also requires accessible `/dev/kvm` and enabled hardware
-virtualization. Have your fleet's Git URL and operating instructions ready;
-[creating a fleet](#create-a-fleet) is another starting point.
-
-For an initial look at configuration and plans, use the
-[reference preview](#preview-the-reference-configuration). The
-[CLI guide](cli.md) covers command families, selectors, and automation.
-Replace angle-bracket placeholders in the examples with your own values.
+Have your fleet's Git URL and operating instructions ready, or
+[create a fleet](#create-a-fleet) of your own. Replace angle-bracket placeholders
+with your values. To explore without launching a VM, try the
+[reference preview](#preview-the-reference-configuration).
 
 ## Install the CLI
 
-The host provisioning wrapper checks prerequisites, installs the matching CLI
-in your Nix profile, prepares the Microsandbox state generation for the pinned
-runtime, and runs `doctor`. On a host with existing Microsandbox state, review
-[runtime provisioning](runtime-provisioning.md) first: generation convergence
-can migrate state and requires quiescent sandboxes. Use
-`./scripts/host-provision.sh --check-only` to inspect an existing host.
-
-For a fresh host, clone the project and run the wrapper:
-
-```sh
-git clone --branch main https://github.com/rybskiworks/workestrate.git
-cd workestrate
-./scripts/host-provision.sh
-workestrate --version
-workestrate --help
-```
-
-Resolve reported failures and review warnings before launching. The
-[Nix build guide](nix-build.md) covers package builds and development shells.
+Follow the [installation guide for your system](install/README.md), then return
+here to connect a fleet. Installation covers host prerequisites, the CLI, and
+runtime provisioning.
 
 ## Configuration
 
@@ -50,111 +29,45 @@ workestrate --fleet personal validate-config
 workestrate --fleet personal workloads
 ```
 
-`personal` is the registry name chosen in `fleet add`. Use the same name for the
-following commands. `fleet add` uses the repository's `main` branch by default;
-add `--ref <branch-or-tag>` when your fleet uses another ref.
+`personal` is the name you chose in `fleet add`. The first registered fleet
+becomes the default; this guide names it explicitly in workload commands.
+`fleet add` uses the repository's `main` branch by default; add
+`--ref <branch-or-tag>` to select another ref.
 
-The final two commands validate the merged configuration and list its workload
-names and kinds. Choose a service or agent from that list. The first registered
-fleet becomes the default; explicit `--fleet personal` keeps this guide's
-selection consistent across project directories and Git branches.
-
-The usual config location is `~/.workestrate`. `WORKESTRATE_CONFIG` and existing
-XDG settings can select another location; `workestrate check` reports the resolved
-paths. To use a particular config, prefix subsequent commands with its path:
-
-```sh
-workestrate --config /path/to/operator-config --fleet personal workloads
-```
-
-`--config` selects the registry and associated Workestrate directories.
-`--fleet` selects a registered fleet. Microsandbox runtime state has its own
-selector, `MSB_HOME`; the packaged default is `~/.microsandbox/current`.
-
-### Create a fleet
-
-To start with your own definitions, use this in place of `fleet add`:
-
-```sh
-workestrate fleet new personal
-```
-
-This creates and registers a local-path fleet in the config's managed store.
-Local-path fleets load edits directly. Edit the
-`workestrate.toml` at the printed path to define workloads, then run
-`workestrate --fleet personal validate-config` and
-`workestrate --fleet personal workloads`. The
-[workload guide](workloads.md) explains configuration layouts and image flakes.
-An explicit destination outside the managed store creates a standalone scaffold;
-publish that repository and register its URL to use it as a managed fleet.
-
-### Set up another machine
-
-When you already have a config repository, clone it in place of `config init`
-and `fleet add`:
-
-```sh
-workestrate config clone <config-path-or-git-url>
-workestrate fleet list
-```
-
-The clone operation provisions the registry and its fleet checkouts. You can
-supply a destination as a second argument and use `--config <destination>` on
-later commands. Transfer the age private key separately through your secure key
-backup process when the cloned fleets already contain encrypted secrets.
-
-### Enable project configuration
-
-Run workload commands from the project directory you intend to expose. `${CWD}`
-mounts and per-directory instances use that invocation directory.
-
-If the project includes a Workestrate configuration layer, review it and enable
-it with:
-
-```sh
-workestrate fleet trust /path/to/project
-```
-
-This records permission to load that project's configuration. Use
-`workestrate fleet untrust /path/to/project` to remove it, or the top-level
-`--no-project-config` flag to skip project layers for one invocation.
+The last two commands validate the merged configuration and list its workloads.
+Choose a service or agent from that list. Run subsequent commands from the
+project directory you intend to expose: `${CWD}` mounts and per-directory
+instances use that directory. If the project supplies a configuration layer,
+[review and enable it](#enable-project-configuration) before continuing.
 
 ## SOPS workflow
 
-For a fleet that needs secrets, inspect the names and destination:
+For a fleet that needs secrets, inspect the required names and target:
 
 ```sh
 workestrate --fleet personal secrets schema
 workestrate secrets target personal
 ```
 
-`schema` prints configured secret environment names. `target` reports the fleet
+`schema` lists configured secret environment names. `target` reports the fleet
 folder, encrypted file, and age key path. The Nix package supplies SOPS and age.
 Keep the age private key on the host, outside repositories, the config, and
 workload mounts; back it up securely.
 
-For a new encrypted secrets file:
+Create a new encrypted secrets file with:
 
 ```sh
 workestrate secrets init --fleet personal
 ```
 
-`init` creates the age key when needed and writes the encrypted file. Follow the
-editor's instructions to enter values and confirm the save. An existing fleet's
-SOPS recipients must include your age public key; see the
-[secrets guide](secrets.md) for recipient and key handling.
+`init` creates the age key when needed and opens the secrets editor. Enter values
+and confirm the save. For an existing file, use
+`workestrate secrets update --fleet personal`; its SOPS recipients must include
+your age public key.
 
-To change an existing file:
-
-```sh
-workestrate secrets update --fleet personal
-```
-
-For interactive editing, clear unrelated secret variables from your shell first:
-any nonempty schema key in the environment selects targeted replacement mode.
-Automation can supply values through the process environment or stdin. Keep
-values out of command arguments, logs, and reports. See
-[secrets management](secrets.md) for input modes and layered secret loading.
+Before interactive editing, clear unrelated secret variables from your shell:
+nonempty schema keys select targeted replacement mode. The
+[secrets guide](secrets.md) covers recipients, input modes, and automation.
 
 For a fleet registered from a Git URL, commit the encrypted file and any
 `.sops.yaml` changes in the checkout reported by `secrets target`, following the
@@ -167,15 +80,9 @@ workestrate fleet update personal
 This makes the committed ciphertext available in the fleet's pinned archive.
 Local-path fleets created by `fleet new` read their files directly.
 
-With a custom config, select both the registry and the fleet explicitly:
-
-```sh
-workestrate --config /path/to/operator-config secrets update --fleet personal
-```
-
 ## Before launching
 
-From the intended project directory, inspect configuration and host readiness:
+From your project directory, check host readiness and inspect the workload plan:
 
 ```sh
 workestrate --fleet personal check
@@ -183,36 +90,31 @@ workestrate doctor
 workestrate --fleet personal workload plan <workload> --show-source
 ```
 
-`check` reports config paths, fleet selection, and layout. `doctor` reports host
-capabilities, tools, runtime pairing, and state health. The plan describes the
-resolved image, command, mounts, network policy, and credential bindings;
-`--show-source` identifies the configuration layer behind each field.
+`check` reports configuration paths and fleet selection. `doctor` checks host
+tools, capabilities, runtime pairing, and state health. The plan shows the image,
+command, mounts, network policy, and credential bindings; `--show-source` reveals
+the configuration layer behind each field.
 
-Confirm the project path, permissions, destinations, and secret bindings in the
-plan. Resolve host failures before starting a workload. Fleet instructions may
-also require image builds or application setup; `workload up` and `exec` perform
-configured image preparation and dependency startup automatically.
-
-Configuration validation establishes that the declared setup is accepted.
-Verify service health and policy behavior in the running VM for deployment
-acceptance; [testing](testing.md) explains those separate checks.
+Review the plan and resolve host failures before starting. Follow any additional
+setup in your fleet's instructions. `workload up` and `workload exec` prepare
+configured images and start dependencies automatically.
 
 ## Run a workload
 
-For a service, start it detached and inspect its logs:
+Start a service in the background and read its logs:
 
 ```sh
 workestrate --fleet personal workload up <service>
 workestrate --fleet personal workload logs <service>
 ```
 
-For an interactive agent, attach from the project directory:
+Or start an interactive agent in your project:
 
 ```sh
 workestrate --fleet personal workload exec <agent>
 ```
 
-Use a second terminal to inspect instances and the fleet's documented health
+In a second terminal, inspect instances and check the fleet's documented health
 endpoint or readiness signal:
 
 ```sh
@@ -220,9 +122,12 @@ workestrate instances
 workestrate ps --json
 ```
 
-`instances` reconciles registry and backend state; `ps` shows Workestrate's
-registered instances. The [CLI guide](cli.md#workloads-and-instances) covers
-parallel instances, dependency selection, image builds, and foreground services.
+`instances` reconciles registry and backend state; `ps` shows registered
+instances. Configuration validation and VM readiness are separate checks; verify
+the running application's health and policy behavior for deployment acceptance.
+See [testing](testing.md) for those checks and the
+[CLI guide](cli.md#workloads-and-instances) for parallel instances, dependency
+selection, and foreground services.
 
 ## Stop a workload
 
@@ -232,15 +137,74 @@ Stop the workload's current slot from the same project directory:
 workestrate --fleet personal workload down <workload>
 ```
 
-To stop all managed workloads belonging to this fleet, use the wider scope:
+To stop all managed workloads belonging to this fleet:
 
 ```sh
 workestrate down --fleet personal
 ```
 
-The fleet operation asks for confirmation. Inspect `workestrate instances`
-afterward to check the resulting state. Further scopes and their effects are in
-[stopping workloads](cli.md#stopping-workloads).
+The fleet operation asks for confirmation. Check `workestrate instances`
+afterward. The [CLI guide](cli.md#stopping-workloads) explains the other teardown
+scopes.
+
+## Other setup paths
+
+### Choose a config path
+
+The usual location is `~/.workestrate`. `WORKESTRATE_CONFIG` and existing XDG
+settings can select another location; `workestrate check` reports the resolved
+paths. Use `--config` to select a registry for one invocation, and `--fleet` to
+choose a fleet inside it:
+
+```sh
+workestrate --config /path/to/operator-config --fleet personal workloads
+workestrate --config /path/to/operator-config secrets update --fleet personal
+```
+
+`--config` also selects associated Workestrate directories. Microsandbox runtime
+state uses `MSB_HOME`; the packaged default is `~/.microsandbox/current`.
+
+### Create a fleet
+
+Use this in place of `fleet add`:
+
+```sh
+workestrate fleet new personal
+```
+
+This registers a local-path fleet in the config's managed store. Edit the
+`workestrate.toml` at the printed path, then run
+`workestrate --fleet personal validate-config` and
+`workestrate --fleet personal workloads`. Local-path fleets load edits directly.
+The [workload guide](workloads.md) explains definitions and image flakes.
+
+An explicit destination outside the managed store creates a standalone scaffold.
+Publish that repository and register its URL to use it as a managed fleet.
+
+### Set up another machine
+
+Clone an existing config in place of `config init` and `fleet add`:
+
+```sh
+workestrate config clone <config-path-or-git-url>
+workestrate fleet list
+```
+
+This provisions the registry and its fleet checkouts. An optional second
+argument selects the destination; use `--config <destination>` afterward.
+Transfer your age private key separately through your secure key backup process
+when the cloned fleets already contain encrypted secrets.
+
+### Enable project configuration
+
+Review the project's configuration layer, then permit Workestrate to load it:
+
+```sh
+workestrate fleet trust /path/to/project
+```
+
+Use `workestrate fleet untrust /path/to/project` to remove permission, or the
+top-level `--no-project-config` flag to skip project layers for one invocation.
 
 ## Preview the reference configuration
 
@@ -253,25 +217,21 @@ WORKESTRATE_FLEET_DIR="$PWD/config.reference" ./result/bin/workestrate validate-
 WORKESTRATE_FLEET_DIR="$PWD/config.reference" ./result/bin/workestrate workload plan example-service
 ```
 
-These commands build the tool, validate the synthetic fixture, and print a plan.
-The preview needs neither KVM nor secret provisioning. To launch an application,
-follow the setup above with your own fleet.
+The preview builds the CLI, validates a synthetic fixture, and prints a plan.
+It needs neither KVM nor secrets. Use your own fleet to launch an application.
 
 ## Setup checklist
 
-For an agent performing setup, capture these inputs and checkpoints in the
-handoff. Keep secret values out of it.
+For a human or agent carrying out setup, record these checkpoints in the handoff:
 
-| Checkpoint | Record |
-| :--- | :--- |
-| Installation | CLI version; host provisioning and `doctor` results. |
-| Selection | Config path, fleet registry name and Git ref, project directory. |
-| Configuration | `validate-config` result and selected workload names. |
-| Secrets | Required names, resolved target, and provisioning result. |
-| Plan | Reviewed image, mounts, policy, and credential bindings. |
-| Execution | Requested instances and observed application readiness. |
-| Cleanup | Teardown scope and observed instance state afterward. |
+1. **Host:** CLI version, installation result, and `doctor` result.
+2. **Selection:** config path, fleet name and Git ref, and project directory.
+3. **Configuration:** validation result and selected workloads.
+4. **Secrets:** required names, target, and provisioning result. Keep values private.
+5. **Plan:** reviewed image, mounts, policy, and credential bindings.
+6. **Execution:** requested instances and observed application readiness.
+7. **Cleanup:** teardown scope and resulting instance state.
 
-Carry out the provisioning and lifecycle steps the operator requested. When
-asked only to review or validate configuration, finish at the relevant inspection
-checkpoint. Report unavailable tools or hosts by name so the next action is clear.
+Carry out the provisioning and lifecycle steps the operator requested. For a
+configuration review, finish at the relevant inspection checkpoint. Name any
+unavailable tool or host so the next action is clear.

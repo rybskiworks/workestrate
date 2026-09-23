@@ -8,67 +8,30 @@
 </a>
 
 <p align="center">
-  <a href="docs/getting-started.md">get started</a> /
-  <a href="docs/cli.md">command reference</a> /
-  <a href="docs/README.md">documentation</a> /
-  <a href="README.agents.md">architecture</a>
+  <samp>
+    <a href="docs/install/README.md">install</a> &nbsp;·&nbsp;
+    <a href="docs/getting-started.md">your first fleet</a> &nbsp;·&nbsp;
+    <a href="docs/cli.md">commands</a> &nbsp;·&nbsp;
+    <a href="docs/README.md">docs</a>
+  </samp>
 </p>
 
-**Give your agents a place to work.**
-
-Workestrate runs agents and services in microVMs, with their environments defined
-in Git. Declare the image, files, network access, and credentials each workload
-needs; inspect the plan, then launch it from one CLI.
-
-Build a fleet around the way you work: a coding agent alongside its development
-services, a shared model gateway, or a collection of task-specific environments.
-Your fleet brings the applications. Workestrate manages their configuration and
-lifecycle.
+Workestrate runs **agents and the services they depend on** in individual
+microVMs. Define the tools, files, network access, and credentials each workload
+needs in a fleet you keep in Git. Inspect the plan, start the services, and attach
+to an agent from one CLI.
 
 <a id="positioning"></a>
 <a id="one-control-plane-explicit-boundaries"></a>
 
-## An environment you can read, review, and repeat
-
-- **Describe the whole workspace.** TOML brings workloads, dependencies, mounts,
-  and access policy together in a versioned fleet.
-- **See what will run.** Plans show the resolved configuration and where its
-  settings came from.
-- **Give each workload its own microVM.** Agents attach interactively; services
-  run in the background through Microsandbox.
-- **Make access deliberate.** Declare network destinations and credential
-  bindings, and keep stored secrets encrypted with SOPS.
-- **Build on reproducible inputs.** Nix pins the CLI and runtime toolchain and
-  provides recipes for fleet-owned images.
-
-<a id="setup"></a>
-<a id="start-here"></a>
-<a id="take-a-look"></a>
-<a id="install-the-tool"></a>
-
-## Get started
-
-Install on **x86_64 Linux** with Git and Nix, with flakes enabled. Running
-workloads also requires access to `/dev/kvm`.
-
-```sh
-nix profile install github:rybskiworks/workestrate
-workestrate --version
-workestrate --help
-```
-
-The [setup guide](docs/getting-started.md) walks through connecting a fleet,
-preparing credentials, checking the host, and launching your first workload.
-It includes checkpoints for agents carrying out the setup. To explore the CLI
-with the bundled examples, start with the
-[preview](docs/getting-started.md#preview-the-reference-configuration).
+TOML describes your workloads and how they fit together. Nix pins the toolchain
+and supplies image-building recipes. Microsandbox runs the VMs.
 
 <a id="how-it-works-today"></a>
-<a id="provision-config-fleet"></a>
 <a id="define-plan-run"></a>
-<a id="fleets-and-the-layering-model"></a>
-<a id="secrets-workflow"></a>
 <a id="a-small-cli-surface-for-a-larger-system"></a>
+
+## A fleet, in a few commands
 
 <a href="docs/getting-started.md">
   <picture>
@@ -77,10 +40,59 @@ with the bundled examples, start with the
   </picture>
 </a>
 
-**Connect → inspect → prepare → run.** Follow the
-[walkthrough](docs/getting-started.md), or use the
-[command reference](docs/cli.md) for configuration, workload lifecycle, secrets,
-and diagnostics.
+With a configured fleet called `dev` and an agent called `coder`, start its
+services and open the agent:
+
+```sh
+workestrate --fleet dev workload up
+workestrate --fleet dev workload exec coder
+```
+
+Services start in dependency order. Agents can also bring up their declared
+dependencies automatically.
+
+<details>
+<summary><samp>inspect it. find it. stop it.</samp></summary>
+
+See the resolved environment and the source of each setting:
+
+```sh
+workestrate --fleet dev workload plan coder --show-source
+```
+
+Inspect instances, then stop the fleet when you're finished:
+
+```sh
+workestrate instances
+workestrate down --fleet dev
+```
+
+Fleet teardown asks for confirmation. The [command guide](docs/cli.md) covers
+logs, parallel instances, image builds, and the rest of the interface.
+
+</details>
+
+<a id="setup"></a>
+<a id="start-here"></a>
+<a id="take-a-look"></a>
+<a id="install-the-tool"></a>
+
+## Get started
+
+Workestrate currently targets **x86_64 Linux with KVM**. Choose your installation
+path for the CLI and host setup:
+
+**[Linux + Nix](docs/install/linux.md)** &nbsp;·&nbsp;
+**[NixOS](docs/install/nixos.md)** &nbsp;·&nbsp;
+**[Windows](docs/install/windows.md)**
+
+<a id="provision-config-fleet"></a>
+<a id="fleets-and-the-layering-model"></a>
+<a id="secrets-workflow"></a>
+
+Installed? **[Set up your first fleet →](docs/getting-started.md)**
+The walkthrough covers configuration, secrets, planning, and launch. For a look
+around first, [preview the bundled configuration](docs/getting-started.md#preview-the-reference-configuration).
 
 <a id="tear-down-safely"></a>
 <a id="one-toolchain-authority"></a>
@@ -89,25 +101,15 @@ and diagnostics.
 <a id="canonical-docs"></a>
 <a id="build-with-us"></a>
 
-## Explore further
-
-| You want to… | Start here |
-| :--- | :--- |
-| Set up a machine and run a workload | [Getting started](docs/getting-started.md) |
-| Choose commands and understand their options | [Command reference](docs/cli.md) |
-| Build your own fleet or workload | [Workload guide](docs/workloads.md) |
-| Understand the architecture or find the code for a task | [Architecture and task map](README.agents.md) |
-| Contribute a change | [Contributing](CONTRIBUTING.md) · [Working instructions](AGENTS.md) |
-| Find a specification or focused guide | [Documentation index](docs/README.md) |
+[Write a workload](docs/workloads.md) · [Explore the architecture](README.agents.md) ·
+[Contribute](CONTRIBUTING.md)
 
 <a id="runtime-status"></a>
 <a id="security-is-a-contract-not-a-badge"></a>
 
-Workestrate is under active development. For deployment decisions, see the
-[current runtime status](README.agents.md#runtime-status) and
-[VM acceptance guidance](docs/testing.md#vm-acceptance). Report vulnerabilities
-through the [security guidance](SECURITY.md).
+Actively developed. See [runtime status](README.agents.md#runtime-status) and
+[VM acceptance](docs/testing.md#vm-acceptance) when planning a deployment.
 
 ---
 
-<sub>Part of <a href="https://github.com/rybskiworks">rybskiworks</a>. Explicit intent. Bounded execution. Evidence over assumption. Original material: <a href="LICENSE">Apache-2.0</a>. Copyright (c) 2026 Georg Rybski. <a href="LICENSING.md">License scope and historical grants</a>; <a href="THIRD-PARTY.md">third-party exceptions</a>.</sub>
+<sub>Part of <a href="https://github.com/rybskiworks">rybskiworks</a>. Original material: <a href="LICENSE">Apache-2.0</a>. Copyright (c) 2026 Georg Rybski. <a href="LICENSING.md">License scope</a> · <a href="THIRD-PARTY.md">Third-party notices</a> · <a href="SECURITY.md">Security</a>.</sub>

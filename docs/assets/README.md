@@ -1,27 +1,21 @@
 # README artwork
 
-Edit these SVGs directly. GitHub selects the light or dark palette through
-`<picture>`; other renderers use the light image. The root README links the hero
-to the rybskiworks organization and the workflow to the
-[setup guide](../getting-started.md).
+The `workestrate-{light,dark}.svg` hero shows declarative configuration flowing
+through Workestrate to individual agent and service microVMs.
+`operating-loop-{light,dark}.svg` illustrates the setup walkthrough and links to
+the guide from the [main README](../../README.md).
 
-| Pair | Purpose |
-| :--- | :--- |
-| `workestrate-{light,dark}.svg` | Project identity and a conceptual control-plane / individual-workload drawing. |
-| `operating-loop-{light,dark}.svg` | Setup workflow: connect a fleet, inspect workloads, prepare credentials and host, then run. |
+Edit the SVGs directly. GitHub selects the palette through `<picture>`; other
+renderers use the light image. Keep both variants' geometry and wording in sync.
 
-The visual language follows [Sketchbook](https://github.com/rybskiworks/sketchbook):
-lowercase typography, a quiet dot field, thin technical linework, warm light and
-deep dark surfaces, and a shared blue/red/blue accent. The drawings show
-Workestrate's workload model and setup workflow.
+The artwork uses the existing blue/red/blue accent, quiet surfaces, and thin
+linework. The README's centered `<samp>` text follows the restrained typography of
+the [rybskiworks profile](https://github.com/rybskiworks).
 
-Keep each pair's geometry and wording identical. Edit both palettes together.
-Use explicit view boxes, readable system-font fallbacks, SVG titles/descriptions,
-and meaningful README alt text. Keep essential information in Markdown as well.
-The files need no scripts, animation, embedded fonts, external resources, or
-`foreignObject`; the artwork is deliberately static.
+Use explicit view boxes, readable system fonts, SVG titles/descriptions, and
+meaningful alt text. Keep essential information in Markdown too. Assets are
+static, with no scripts, embedded fonts, external resources, or `foreignObject`.
 
-After editing, parse each file as XML, render both themes at their intrinsic size
-and at typical README widths, and check for clipped text or misaligned connectors.
-Review the root README's `<picture>` paths and links. Exported raster previews
-are review artifacts, not repository source files.
+After editing, parse each SVG as XML and render both themes at intrinsic size and
+typical README widths. Inspect text fit and connectors, then check the embedding
+paths and links. Keep raster previews outside the repository.
