@@ -1,19 +1,19 @@
 # README artwork
 
-These are source SVGs, not screenshots. Both theme variants are committed so
-GitHub can select them with `<picture>` while other renderers use the light image.
-The root README links the hero to the rybskiworks organization.
+Edit these SVGs directly. GitHub selects the light or dark palette through
+`<picture>`; other renderers use the light image. The root README links the hero
+to the rybskiworks organization and the workflow to the
+[setup guide](../getting-started.md).
 
 | Pair | Purpose |
 | :--- | :--- |
 | `workestrate-{light,dark}.svg` | Project identity and a conceptual control-plane / individual-workload drawing. |
-| `operating-loop-{light,dark}.svg` | Define policy, scope authority, delegate work, validate results. An operating philosophy, not a tested-capability badge. |
-| `layering-{light,dark}.svg` | Configuration layering stack: reference, the active fleet layer, user-global, trusted project/local, plus the config-dir bypass. |
+| `operating-loop-{light,dark}.svg` | Setup workflow: connect a fleet, inspect workloads, prepare credentials and host, then run. |
 
 The visual language follows [Sketchbook](https://github.com/rybskiworks/sketchbook):
 lowercase typography, a quiet dot field, thin technical linework, warm light and
-deep dark surfaces, and a shared blue/red/blue accent. The drawings are specific
-to Workestrate rather than copies of Sketchbook's branching exploration diagram.
+deep dark surfaces, and a shared blue/red/blue accent. The drawings show
+Workestrate's workload model and setup workflow.
 
 Keep each pair's geometry and wording identical. Edit both palettes together.
 Use explicit view boxes, readable system-font fallbacks, SVG titles/descriptions,

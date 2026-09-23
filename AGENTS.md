@@ -7,6 +7,10 @@
   ownership, terminology, operating reference, and task-to-source navigation.
   Consult the relevant sections for cross-cutting work or unfamiliar boundaries.
   Focused workers can use the relevant code and applicable instructions directly.
+- Write documentation around the reader’s task and the current interface. Explain
+  concepts directly, keep each procedure in one owning guide, and link to it from
+  introductions. Give alternative workflows their own steps and place operational
+  constraints beside the action they affect. Keep change history in commits and ADRs.
 - This file holds repository-wide working instructions. Apply any additional
   instructions scoped to the files you change. [docs/README.md](docs/README.md)
   indexes focused guides; [SPEC.md](SPEC.md) maps the maintained system contracts.

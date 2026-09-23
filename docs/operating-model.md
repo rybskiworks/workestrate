@@ -1,69 +1,73 @@
-# Operating model — as-built operator guide (A6)
+# Operating model
 
-The operator-facing description of how workestrate configs run day to day:
-what "prod" means, how dev work happens without moving pins, what gets
-consumed from where, and how teardown, images, and provenance behave. It
-is **as-built**: every mechanism below was verified against the code on
-`migration/tool-model` at `bffa481`. Decisions are cited to their ADRs
-under [migration/50-decisions/README.md](migration/50-decisions/README.md)
-(0025 home/lockfile, 0026 per-instance addressing, 0030 instance
-lifecycle, 0032 deployment versioning/cleanup). Companion docs:
-[secrets.md](secrets.md), [testing.md](testing.md),
-[nix-purity.md](nix-purity.md). A final appendix ("Mechanism index") maps
-every major claim to its primary code path so each one traces.
+Use this guide to update a fleet, try a development branch, inspect running
+instances, and choose a teardown scope. Start with [getting started](getting-started.md)
+for first-time setup or the [command reference](cli.md) for command syntax.
 
-## 1. Prod and dev: one stable line, pins everywhere
+The sections below explain content pins, fleet selection, image retention, and
+instance identity. The [mechanism index](#appendix-mechanism-index) points to
+their implementations; the [architecture decisions](migration/50-decisions/README.md)
+record the rationale. For host preparation, credentials, and runtime acceptance,
+see [runtime provisioning](runtime-provisioning.md), [secrets](secrets.md), and
+[testing](testing.md).
 
-There is **no `prod` branch** (ADR 0032, RESOLVED user decision): `main`
-IS the stable line. A prod deployment is two pins held together:
+## 1. Stable deployments and content pins
+
+`main` is the stable integration branch. A deployment combines two pins:
 
 * **Content pin** — registry entries carry `ref` (typically `"main"`) and
   the generated lockfile `workestrate.lock` records the exact rev each
-  entry was resolved to. Runtime verbs consume the locked content, not
-  "whatever main is today".
+  entry was resolved to. Runtime verbs consume that committed content.
 * **Binary pin** — the installed binary comes from the nix profile
   (`scripts/host-provision.sh` runs `nix profile install .#workestrate`
   when the profile is stale) and reports its build rev via
   `workestrate --version` (`0.1.0-<rev>`).
 
 The lockfile is v2 (ADR 0032 addendum §Config source model; ADR 0025(e)):
-each `[repos.<name>]` entry carries `{url, ref, rev, sha, fetched_at}` —
+each `[fleets.<name>]` entry carries `{url, ref, rev, sha, fetched_at}` —
 `rev` is the pin, `sha` the commit the content archive was produced from
 (equal to `rev` today), `fetched_at` the RFC3339 UTC resolution time.
 Additional refs of the same repo are pinned per-ref under
-`[repos.<name>.refs.<ref>]` with the same `{rev, sha, fetched_at}` shape.
-The lock is generated — never hand-edited — and written only by explicit
-verbs (`config add`, `config update`, `config remove`, `config init`,
-`config clone`) or first-resolution-with-notice; no
-verb moves a pin silently as a side effect.
+`[fleets.<name>.refs.<ref>]` with `{rev, sha, fetched_at}` fields; here `rev`
+records the requested ref and `sha` records its resolved commit.
 
-Overrides exist at two levels: per-entry (`ref`/`rev` fields in the
-registry) and per-invocation (`--config-ref <ref>`, a global flag valid on
-every subcommand). Dev work (next section) uses these overrides and never
-touches the pins.
+Manage this generated file through `fleet add`, `fleet update`, `fleet remove`,
+`config init`, and `config clone`. Consuming an unpinned entry or ref records
+its first resolution and prints a notice. To update a registered fleet's primary
+pin, run `workestrate fleet update <name>`; omitting the name updates all
+registered Git-backed fleets. Commit or stash changes in their managed clones
+first. Local plain-path fleets are consumed directly and skipped by this update.
+
+The registry supplies each entry's `ref` and recorded `rev`. For development,
+`--config-ref <ref>` or a workload's inline ref selects an additional pinned
+revision while preserving the primary pin.
 
 ## 2. Dev by branch name
 
-Dev freshness is opt-in by ref, in two forms:
+Select a development revision in either of two forms:
 
 * **Whole-config override** — `workestrate --config-ref feat-x <verb>`
   resolves every git-backed config entry at that ref (via the archive
-  cache) and *implies the fleet*: a branch-shaped ref becomes the active
-  fleet name. A 40-hex sha is legal for consumption but implies no
-  fleet.
-* **Per-workload inline override** — `workload up prime:feat-x[@canary]`.
+  cache). A branch ref contributes a fleet-name candidate, subject to the
+  [selection order below](#7-fleet-model-quick-reference). A commit SHA selects
+  content without supplying a fleet-name candidate.
+* **Per-workload inline override** — `workestrate workload up example-service:feat-x@canary`.
   Grammar `name[:ref][@id]`: `:` = config branch, `@` = instance id. The
   named workload's capsule is read at `<ref>` from its declaring repo's
   archive while everything else stays config-scoped. Dependencies never
-  follow the override in v1.
+  follow the override.
 
-A **bare `name@id` (no colon) is rejected** with guidance to use
-`--instance`: instance ids ride the flag; the `@` form is only valid in
-the combined `name:ref@id` override. `down`/`logs` also reject the `:ref`
-form (teardown targets an instance id via `--instance`, not a ref).
+The ref must resolve in the managed clone. Its first use adds a per-ref lock
+entry with a notice; later invocations reuse that pinned commit. Selecting a
+branch name therefore selects a recorded revision of that branch.
 
-Instance-id precedence, highest first (as implemented): explicit
-`--instance <id>`; then inline `@id`; then `--new` allocation OR the
+Use `--instance <id>` to select an instance independently of a ref, including
+for `down` and `logs`. The inline `@id` form belongs to a combined
+`name:ref@id` override. Bare `name@id` and `down`/`logs` with `:ref` are
+rejected.
+
+Instance-id precedence, highest first: explicit
+`--instance <id>`; then inline `@id`; then `--new` allocation or the
 `:ref`-derived sanitized id (when both are given, `--new` wins the id
 while the ref still drives the substitution); then per-dir derivation
 (`strategy = "per-dir"` only); then the strategy default (`parallel`
@@ -71,97 +75,77 @@ auto-slug; otherwise the singleton).
 
 The `:ref`-derived id is the ref run through `sanitize_instance_id`
 (lowercased, non-`[a-z0-9]` runs collapsed to `-`, capped at 32 chars,
-fail-closed on all-symbol or purely numeric results), so `prime:feat-x`
-plans instance `prime@feat-x` coexisting with `prime@main`.
+fail-closed on all-symbol or purely numeric results), so `example-service:feat-x`
+uses instance id `feat-x` within the selected fleet's workload slot.
 
 ## 3. Commit-before-consume
 
-Runtime verbs consume **locked archive content**, never a working copy:
-git-backed entries resolve to `<state>/cache/gitv3/<sha>/`, a
+Git-backed entries resolve to `<state>/cache/gitv3/<sha>/`, a
 content-addressed directory produced by `git archive <sha>` from the
-single managed clone per repo. Consequences: only committed content is
-archivable, so a dirty working tree is invisible to the pinned/remote
-paths; nothing is checked out to consume content; and local plain-path
-entries are the explicit exception — consumed content-as-is from the
-filesystem (merge layer name `branch = "local"`), where
-commit-before-consume does NOT apply.
+single managed clone per repository. Commit edits before selecting them for
+execution. Archive consumption uses the selected commit independently of
+uncommitted edits in that clone. Local plain-path entries load their current
+filesystem content with layer branch `local`.
 
-**Upgrade note (verified behavior).** Resolution precedence for a git-backed
-entry is: (1) the lock pin — silent; (2) the registry-recorded `rev` —
-**also silent**; (3) first resolution with a stderr notice — the ONLY
-notice path. A config upgraded from a pre-lock-v2 binary therefore has pins
-already (a v1 lock's `rev`, or a registry-recorded `rev`) and switches to
-pinned-archive consumption **without any notice firing**; the notice only
-announces a first-ever resolution of an unpinned entry. Expected
-post-upgrade behavior: run `workestrate config update` explicitly to
-re-pin entries at their current refs. Related fail-safe quirk (recorded in
-the ADR open questions): a hand-edited `ref` with a stale registry `rev`
-consumes the old rev silently until `config update`.
+For ordinary Git-backed consumption, resolution checks the lock's entry for the
+effective ref, then a matching primary pin, then the registry-recorded `rev`.
+If none exists, it resolves the ref and records a pin with a stderr notice.
+Existing pins, including those carried forward from a v1 lock, are read without
+a notice. After changing a registry `ref`, use `workestrate fleet update <name>`
+to refresh its recorded revision: an existing registry `rev` remains a fallback
+until it is updated.
 
 ## 4. Lock v2 vs old binaries: ordering matters
 
-`LOCK_VERSION` is 2. A v1 lock (version absent or 1) loads via serde
-defaults and is NOT version-bumped on read — readers never rewrite. A lock
-with a version newer than the binary supports is a **hard error**:
+`LOCK_VERSION` is 2. Reading a v1 lock (version absent or 1) preserves its
+version and supplies defaults for newer fields. A lock with a version newer
+than the binary supports is a **hard error**:
 
 ```
 config created by a newer workestrate (lock version N > M supported by this
 binary); upgrade this workestrate before using the config at <path>
 ```
 
-This posture is by design (fail-closed, like every other versioned file).
-**Ordering consequence for operators:** sync the nix profile to the new
-binary BEFORE pointing old binaries at an updated config. An old binary
-meeting a v2 lock refuses the config rather than misreading it.
+Update the installed binary before using a config written by a newer release.
+A binary that supports only v1 refuses a v2 lock.
 
-## 5. Worktrees are for editing, never for consumption
+## 5. Editing branches
 
-Git worktrees have exactly ONE sanctioned use: simultaneous human editing
-of two branches. Consumption never creates checkouts or worktrees — two
-refs of one repo are two archive directories under `cache/gitv3/`, not two
-working copies. Nothing is checked out unless someone is actively editing
-it (ADR 0032 addendum §Operating model; the archive module's own header:
-"NO worktrees, NO checkouts").
+Use Git worktrees to edit several branches concurrently. Git-backed runtime
+consumption reads the selected revisions from archive directories under
+`cache/gitv3/`, using the managed clone as its object database.
 
-## 6. Fleet hook status: not shipped
+## 6. Selecting a fleet in the shell
 
-The devshell context hook from the original ADR 0032 implementation order
-is **NOT shipped** (ADR 0032: "subsumed by the CLI's checkout-branch
-context derivation"). What exists instead, exactly: `WORKESTRATE_FLEET`
-is read by the fleet resolver (step (a) of the derivation ladder, next
-section); it can be set by hand or exported in a shell. The global
-`--fleet <name>` flag sets `WORKESTRATE_FLEET` at CLI entry, which also
-propagates it to detached children via spawn env inheritance.
-Checkout-branch derivation happens CLI-side inside the invocation — the
-resolver inspects the first layer's checkout branch itself. There is no
-shell integration to install. (The only hooks in the tree are unrelated:
-the config's pre-commit tombi gate and workload pre-start seed hooks.)
+Use `--fleet <name>` for one command or export `WORKESTRATE_FLEET` for a shell
+session. The flag sets the environment variable at CLI entry and propagates the
+selection to detached children. Without an explicit selection, the CLI inspects
+the configured checkout's branch using the order below.
 
 ## 7. Fleet model quick reference
 
-Derivation order (pinned; first match wins):
+Selection order, first match wins:
 
 1. explicit `--fleet` / `WORKESTRATE_FLEET` — strict semantics: when
    fleets are registered the name must be one of them (hard error
    otherwise); a fleets-less config ignores the env var;
 2. `--config-ref <branch>` — a branch-shaped ref becomes the fleet-name
    candidate (a sha implies nothing);
-3. checkout branch of the FIRST layer's checkout;
+3. checkout branch of the first registry layer;
 4. default resolution — `settings.default_fleet`, else bare layers when
-   no fleets are registered, else the existing hard error. This final step
-   IS the ADR's "> main": main is the stable line, and there is no literal
-   `"main"` fleet name.
+   no fleets are registered, else an error requesting a fleet selection.
 
-Fleet names must match `^[a-z0-9][a-z0-9-]*$` with no trailing hyphen
-(names become `<fleet>-<workload>` slot prefixes). Enforcement is
-fail-closed at registry load: a registry carrying an invalid fleet name
-fails to load with an error naming the offending key (the `G4` gate in the
-code; ADR 0032 A1 resolution). The lenient dir-resolution load path used
-for early path setup deliberately stays lenient. There is **no automatic
-migration** for homes with pre-existing odd names: the fix is hand-editing
-the registry TOML (fleets registered via `fleet add`/`fleet new` are
-validated at registration). Legacy records with `context: null` are
-unknown-context forever — never migrated, never hard-failed.
+Branch candidates are normalized to lowercase with punctuation runs replaced by
+hyphens. A candidate matching a registered fleet selects that fleet's layer.
+Otherwise it supplies the runtime identity while content comes from
+`settings.default_fleet`, or from bare layers when no fleets are registered.
+Use an explicit `--fleet` to select a registered fleet consistently across branches.
+
+Fleet names must match `^[a-z0-9][a-z0-9-]*$` with no trailing hyphen;
+they become `<fleet>-<workload>` slot prefixes. Registry loading reports
+invalid names so you can correct the key in `config.toml`. Fleet registration
+also validates names. Early directory resolution uses a lenient registry read.
+Legacy instance records with `context: null` remain valid with an unknown context.
 
 ## 8. Identity and image tags
 
@@ -170,12 +154,9 @@ instance id. **slot** = `<workload>` (no context) or `<ctx>-<workload>`;
 **instance** = the slot (singleton) or `slot@id` (parallel / per-dir /
 scoped-dep shapes).
 
-Image tags are immutable content addresses: `name:ctx.sha` per build
-(ctx-less `name:sha` when no context is in play; the dot separator is
-ADR 0032's 2026-08-28 amendment — the two-colon form is an invalid OCI
-reference); the mutable current-pointer lives in the state-dir image
-state (`pointers` map), not in any registry tag, so a dev rebuild cannot
-move what prod resolves.
+Image tags are immutable content addresses: `name:ctx.sha` per build, or
+`name:sha` without a context. The image state file's `pointers` map tracks the
+current tag for each group, keeping builds in different contexts independent.
 
 Retention is keep-last-N with a cascade (first configured value wins):
 
@@ -190,9 +171,9 @@ always counts toward N). Enforcement points:
 
 * **prune-on-load** — after a successful image build+load (build mode
   only), older tags in the same `(name, ctx)` group beyond N are removed;
-* **`workestrate images gc`** — manual sweep of ALL groups. Documented
-  asymmetry: the sweep resolves N WITHOUT the capsule rung (it operates on
-  state-dir groups, not invocations).
+* **`workestrate images gc`** — manual sweep of all recorded groups. It resolves
+  N from the fleet, config, and built-in settings because this operation has
+  state-file groups rather than workload capsules.
 
 Running sandboxes are never affected: the protection set is every
 `image_tag` recorded across all port-registry records
@@ -203,32 +184,30 @@ the protection set is unreadable, gc refuses and prune-on-load skips
 
 ## 9. Provenance stamps
 
-Registry records carry `{image_out_hash, config_hash}` stamps (ADR 0032
+Instance registry records carry `{image_out_hash, config_hash}` stamps (ADR 0032
 §Provenance stamps). The config hash is FNV-1a 64-bit over a canonical
 labeled serialization of the plan's **runtime-relevant fields only**:
 image, workdir, command, resources, env (sorted, effective post-merge
-view), secret NAMES, ports, mounts (+ policy fragments), network rules.
-Pinned exclusions operators should know: **ports contribute guest port +
-optional name ONLY** (host ports and bind IPs are allocation-dependent
-and never churn the hash); **seed declarations and seed content are
-excluded**, so reseeding never makes an instance stale — seeds refresh
-via the explicit `--reseed` flow (the mount a seed lands in remains
-hashed); comments, formatting, identity metadata, and orchestration
-policy (`on_conflict`, port strategy, `on_skew`) are not build inputs.
+view), secret names, ports, mounts (including policy fragments and declared
+guest ownership), network rules, SSH policy, and explicit guest init and
+root-disk capacity.
+Ports contribute their guest port and optional name; allocated host ports and
+bind IPs are excluded. Seeds refresh through `--reseed`, independently of
+staleness: seed declarations and content are excluded, while their destination
+mounts remain hashed. Comments, formatting, identity metadata, and orchestration
+policy (`on_conflict`, port strategy, `on_skew`) are also excluded.
 
 Display: hashes are stored full-length (16 lowercase hex); human surfaces
-truncate to the FIRST 4 hex chars. A stale `ps` row reads
-`stale (config xxxx → current yyyy)`; JSON gains an additive `staleness`
-object. Both are omitted where staleness is not computable — including
-**pre-stamp records, which are unknown-version and NEVER auto-stale**
-under any policy.
+show the first 4 hex characters. A stale `ps` row reads
+`stale (config xxxx → current yyyy)`; JSON includes a `staleness` object.
+Records without comparable stamps omit this information and retain unknown
+version status; they do not trigger automatic replacement through `on_skew`.
 
 Disposition is the workload knob `instance.on_skew` with exactly three
 accepted values: `warn` (default — proceed and print the divergence),
 `replace` (tear down and start fresh), `reuse-silently` (adopt without
-comment). Since the provenance landing this wiring is REAL: both reuse
-paths (the child Reuse arm and the detached-up parent short-circuit)
-compare stamps and honor the disposition.
+comment). Both the child reuse path and the detached-service parent compare
+stamps and apply this setting.
 
 ## 10. The down ladder
 
@@ -238,101 +217,86 @@ Teardown scopes, narrowest to widest:
 instance < workload < fleet < config-ref < config (--all) < everything
 ```
 
-The instance/workload rungs stay on
-`workload <name> down [--instance|--all-instances]`. The four sweep rungs
-live on `workestrate down`: exactly ONE selector per invocation —
-`--all`, `--fleet <name>`, `--config-ref <ref>`, or `--everything`.
-Bare selector-less `down` is a usage error naming the ladder; it never
-guesses a scope. Scripted automation migrates as
-`down-all --yes` → `down --all --yes` (`down-all` survives as a hidden
-alias but now requires a selector too — the old bare `down-all --yes` is a
-usage error).
+Stop a workload with `workestrate workload down <name>`. Add `--instance <id>`
+to select one parallel instance, or `--all-instances` to include every instance
+of that workload.
 
-Exact gates, as implemented:
+For a broader sweep, use `workestrate down` with exactly one scope selector:
+`--all`, `--fleet <name>`, `--config-ref <ref>`, or `--everything`. A bare
+`down` reports a usage error. The compatibility alias `down-all` accepts the
+same selectors.
 
-* **Managed rungs** (fleet/config-ref/config) take the standard single
-  yes-gate: interactive prompt unless `--yes`; a piped `y`/`yes`
-  confirms; a declined prompt aborts with exit 1.
-* **`--everything` is DOUBLE-gated.** (a) The flag must appear TWICE —
-  `--everything --everything`; a single occurrence is a usage error raised
-  BEFORE any prompt. (b) The yes-gate with a distinct widened-blast-radius
-  prompt on a tty: `This will stop EVERY msb sandbox INCLUDING ones
-  workestrate does not manage. Continue? [y/N]`. `--yes` skips it;
-  non-interactive stdin WITHOUT `--yes` HARD-REFUSES — there is no
-  piped-y escape for this rung.
-* `down --config-ref` validates fail-closed BEFORE any teardown: a 40-hex
-  sha is refused ("a sha does not imply a fleet"); an unknown ref errors
+Confirmation and selection rules:
+
+* **Managed scopes** (fleet/config-ref/config) require confirmation unless
+  `--yes` is given. Interactive use prompts; piped `y`/`yes` also confirms.
+  A declined prompt aborts with exit 1.
+* **Everything scope** requires `--everything --everything` and confirmation
+  that every Microsandbox sandbox, including unmanaged ones, may be stopped.
+  Interactive use prompts; non-interactive use requires `--yes`.
+* `down --config-ref` validates the ref before teardown: a 40-hex
+  SHA is refused ("a sha does not imply a fleet"); an unknown ref errors
   listing the known refs (registry entry refs + lockfile entry refs and
   ref keys).
-* Fleet scope keys on RECORD context (primary) or the `<fleet>-` slot
-  prefix (corroborating only) — never bare-name equality.
+* Fleet scope uses the record's context, with the `<fleet>-` slot prefix as
+  corroborating evidence.
 
-Generation coverage (ADR 0037): the `home` (`--all`) and `everything` scopes sweep ALL retained msb state generations under `$HOME/.microsandbox/generations/` (multi-generation down sweeps), not only the `current` generation.
+The `--all` and `--everything` scopes include all retained Microsandbox state
+generations under `$HOME/.microsandbox/generations/` (ADR 0037). Fleet and
+config-ref scopes operate on the current runtime home.
 
 Classification evidence per target: registry record ∨ dashed slot pattern
-(`<ctx>-<workload>`) ∨ the `workestrate.log` artifact (detached-child log,
-persisted in the state dir at `logs/<instance>/workestrate.log` since
-2026-08-30 — the legacy sandbox-dir location is still probed).
-The image-tag evidence form from the original cleanup sketch is
-deliberately NOT implemented (ADR 0032 narrowing pin: tags are immutable
-`name:ctx.sha` now, and the log alone carries full recall).
+(`<ctx>-<workload>`) ∨ the `workestrate.log` artifact. The detached-child log
+lives at `<state>/logs/<instance>/workestrate.log`; teardown also checks the
+legacy sandbox-directory location.
 
 Outcomes: every target goes through the hardened six-step teardown (stop →
 wait-exit → remove → unregister → policy-dir → sandbox-dir); per-target
 results print under one scope header (`down --all (config): N target(s)`),
-JSON wraps them as `{scope, results}`; ANY failure exits nonzero; an empty
+JSON wraps them as `{scope, results}`; any failure exits nonzero; an empty
 selection exits 0 reporting `0 target(s)`. Unmanaged candidates exist only
-under `--everything` and are reported with empty evidence honestly.
+under `--everything` and are reported with empty evidence.
 
-`workestrate clean` is state/cache hygiene only (contents of
-`workspaces/`, `var/`, `run/`) and NEVER tears down VMs.
+`workestrate clean` removes the contents of the state directories `workspaces/`,
+`var/`, and `run/`. Stop running workloads before clearing their state; `clean`
+does not stop VMs.
 
 ## 11. Per-directory instances (`strategy = "per-dir"`)
 
-Opt-in fifth strategy value (ADR 0030 V-addendum §V1; USER DECISION:
-opt-in, not default-for-agents). Mechanics: it requires a cwd-templated
-mount (`${CWD}` or `${CWD}/...`) on the workload — declaring `per-dir`
-without one is a validation error, fail-closed at config validation. The
-instance id is `<dirname-slug>-<hash8>` of the CANONICALIZED invocation
-cwd: last path component slugged (lowercased, separator runs collapsed,
+Set `instance.strategy = "per-dir"` to give each project directory its own
+workload instance (ADR 0030 V-addendum §V1). The workload must declare a
+cwd-templated mount (`${CWD}` or `${CWD}/...`); configuration validation
+checks this requirement. The instance id is `<dirname-slug>-<hash8>` of the
+canonical invocation cwd: last path component slugged (lowercased, separator runs collapsed,
 ≤23 chars) plus the first 8 hex chars of an FNV-1a 64 hash of the full
-canonical path — same directory → same id; different directories never
-share one (even with equal basenames, since the full path is hashed).
+canonical path. The same directory produces the same id; hashing the full
+path distinguishes directories with equal basenames.
 State mounts are instance-scoped: the declared state root gains the
 instance-key segment, so two per-dir instances never share state.
 Source-gone semantics: the record persists (with `source_dir` recorded at
 create) when the directory disappears; such records are ordinary members
-of every down sweep (pinned by test). `on_skew` is REAL for per-dir
-instances post-A3: the parent-side staleness comparison covers the
-detached-reuse path per-dir instances actually take.
+of applicable down sweeps. The parent-side staleness comparison applies
+`on_skew` when reusing a detached per-directory instance.
 
 ## 12. Parallel instances and msb sandbox-name encoding
 
-Landed at `bffa481` (ADR 0030 addendum 2026-08-26). Workestrate identities
-remain `slot@id` EVERYWHERE — registries, slots, CLI, down scopes. Only
-the name handed to the microsandbox SDK is encoded, because the SDK
-validates sandbox names itself and `@` is illegal in them. An
-already-SDK-legal name passes through UNCHANGED (plain slots like
-`personal-litellm` keep their exact observable names — zero churn for
-existing singleton homes). Otherwise every illegal char becomes `--` (so
+Workestrate uses `slot@id` identities in registries, CLI commands, and teardown
+scopes (ADR 0030). It encodes the name passed to the Microsandbox SDK to fit
+the SDK's allowed characters. An SDK-legal name such as `personal-service`
+passes through unchanged. Otherwise every illegal character becomes `--` (so
 `@` → `--`) and the result gains a `-<fnv1a64 hex8 of the original
-identity>` suffix, keeping encoded names collision-free against legal
+identity>` suffix, making encoded names collision-resistant against legal
 names that literally contain `--` (`a--b` stays `a--b`; `a@b` becomes
 `a--b-<hash>`). Encoded names are clamped to the SDK's 128-byte cap with
 the suffix intact.
 
-**Observable change:** `~/.microsandbox/sandboxes/*` directory names for
-parallel/per-dir/scoped-dep instances are now the ENCODED spelling (e.g.
-`personal-litellm--canary-<hash8>`); scripts reading that directory must
-expect it. Sandboxes created by older forks under raw-`@` names remain
-manageable: never-refuse teardown paths try the legacy raw spelling as a
-fallback lookup (encoded first). Decode from an encoded name is
-best-effort display convenience only — registry records stay the source
-of truth.
+Directories under `<MSB_HOME>/sandboxes/` use the encoded spelling, such as
+`personal-service--canary-<hash8>`. Teardown looks up the encoded name first,
+then the legacy raw spelling for older sandboxes. Use registry records to
+resolve instance identities; decoding a directory name supplies only a
+best-effort display value.
 
 ## 13. Known limitations
-
-Stated plainly, each verified against the current tree:
 
 * **Multi-context staleness under-reporting.** `ps` staleness compares
   each record against the ACTIVE config view only. Instances built under a
@@ -358,39 +322,23 @@ Stated plainly, each verified against the current tree:
   base containing a literal `--` or starting with an illegal character is
   unrecoverable — a display-only corner; every record-driven path is
   unaffected. Implication: never parse meaning out of an msb sandbox dir
-  name; always resolve through the registry record. Open question (dated
-  2026-08-26, nothing scheduled): candidate upgrades if either ever bites —
-  a wider (e.g. 16-hex) or keyed suffix hash, fully reversible
-  percent-style escape encoding, or an upstream widening of the SDK's
-  `validate_sandbox_name` charset.
-* **README verb-shape drift (RESOLVED 2026-08-26).** The README CLI rows
-  described the old `down-all` verb shape; the README sweep updated them to
-  the as-built ladder. No longer applicable.
-* **Ignored-test inventory (exact, counted at `bffa481` — five total).**
-  Two DB-pool lib tests in `src/microsandbox/runtime/mod.rs` run only with
-  `--ignored` (the SDK pins a process-global database pool):
-  `down_all_instances_returns_notfound_when_msb_db_empty_but_openable` and
-  `down_hardened_notfound_walks_the_full_six_step_sequence`. Three
-  KVM-host integration tests need real virtualization and a loaded image:
-  `detached_up_new_registers_slot_at_slug_and_down_stops_it`
-  (tests/lifecycle_detached.rs),
-  `detached_example_litellm_up_from_flake_less_cwd_passes_project_root_gate`
-  (tests/flake_root_gate.rs), and
-  `kvm_up_after_image_content_edit_rebuilds_before_spawn`
-  (tests/ensure_images_e2e.rs). Everything else runs in the normal
-  `cargo test` pass.
+  name; always resolve through the registry record.
+
+The [testing guide](testing.md) separates repository checks from VM acceptance.
+Use the [runtime status](../README.agents.md#runtime-status) when assessing a
+deployment's outstanding acceptance gates.
 
 ## Appendix: Mechanism index
 
-Every major claim above, mapped to its primary code path
+Primary code paths for the mechanisms above
 (`control/agentctl/src/` abbreviated as `src/`).
 
 | Claim | Primary code path |
 |---|---|
-| Lock v2 shape `{rev, sha, fetched_at}` + per-ref map | `src/config/lockfile.rs` — `LockedRepo`, `LockedRef`, `LOCK_VERSION` |
-| Newer-lock hard error, exact phrase | `src/config/lockfile.rs` — `load_home_lock_at` |
+| Lock v2 shape `{rev, sha, fetched_at}` + per-ref map | `src/config/lockfile.rs` — `LockedFleet`, `LockedRef`, `LOCK_VERSION` |
+| Newer-lock hard error | `src/config/lockfile.rs` — `load_config_lock_at` |
 | v1 loads via defaults, never bumped on read | `src/config/lockfile.rs` — serde defaults + `default_lock_version` |
-| Pin writers (explicit only) | `src/config/lockfile.rs` — `upsert_locked_pin`, `upsert_locked_ref` |
+| Primary and per-ref pin writers | `src/config/lockfile.rs` — `upsert_locked_pin`, `upsert_locked_ref` |
 | `--config-ref` global flag | `src/main.rs` — `Cli.config_ref` (global), `async_main` env stamping |
 | Inline grammar `name[:ref][@id]`; bare `@` rejected | `src/config/inline_ref.rs` — `parse_workload_selector` |
 | Instance-id precedence chain | `src/main.rs` — `rewrite_action_for_inline_selector`; `src/commands/lifecycle.rs` — `resolve_dependent_instance_id` |

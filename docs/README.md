@@ -1,55 +1,44 @@
-# Documentation map
+# Workestrate documentation
 
-Start with the [human README](../README.md) for the project and first commands.
-Use [README.agents.md](../README.agents.md) for optional architecture, repository
-ownership, and the operating reference. [AGENTS.md](../AGENTS.md) contains working
-instructions, not an architectural onboarding requirement for every agent.
+[What is Workestrate?](../README.md) · [Get started](getting-started.md) ·
+[CLI guide](cli.md) · [Architecture and source map](../README.agents.md)
+
+## Set up and run workloads
+
+| I want to… | Read |
+| :--- | :--- |
+| Install Workestrate and run my first workload | [Getting started](getting-started.md), including a [setup checklist](getting-started.md#setup-checklist) for humans and agents. |
+| Find a command, flag, or fleet selector | [CLI guide](cli.md). |
+| Define workloads and build their images | [Workload layouts](workloads.md). |
+| Manage instances, ports, and teardown | [Operating model](operating-model.md). |
+| Provision or update credentials | [Secrets](secrets.md) and [signing keys](signing-keys.md). |
+| Configure event-driven agents | [Event agents](event-agents.md). |
+| Inspect runtime state or provision a host | [Runtime provisioning](runtime-provisioning.md). |
 
 ## Understand the system
 
-| Document | Owns |
+| Document | Covers |
 | :--- | :--- |
-| [Specification map](../SPEC.md) | Entry point to the maintained system contracts and their owners. |
+| [Architecture and source map](../README.agents.md) | Vocabulary, component ownership, configuration flow, and task-to-code navigation. |
+| [Specification map](../SPEC.md) | Maintained system contracts and their owners. |
 | [Target specification](migration/20-target-system-spec.md) | Detailed configuration, CLI, seed, and lifecycle semantics. |
-| [Security model](migration/30-security-model.md) | Policy layering and authority boundaries. |
-| [Architecture decisions](migration/50-decisions/README.md) | Rationale, alternatives, and decision history. Check supersession and implementation status. |
+| [Security model](migration/30-security-model.md) | Policy layering, trust, and authority boundaries. |
+| [Architecture decisions](migration/50-decisions/README.md) | Design rationale, decision status, and supersession. |
 
-## Build and operate
+## Build, test, and contribute
 
-| Document | Owns |
+| Document | Covers |
 | :--- | :--- |
-| [Getting started](getting-started.md) | Initial build, operator setup, and secrets entry points. |
+| [Contributing](../CONTRIBUTING.md) and [repository instructions](../AGENTS.md) | Branches, review, required checks, and working conventions. |
 | [Nix build ownership](nix-build.md) | Toolchain inputs, SDK pairing, packaging, and verification entry points. |
-| [Nix purity](nix-purity.md) / [devshell rules](nix/devshells.md) | Source/build separation and shell behavior. |
-| [Workload layouts](workloads.md) | Standalone fleets, fleet capsules, image ownership, and current composition limits. |
-| [Operating model](operating-model.md) | Instances, addressing, teardown, and operational scope. |
-| [Event agents](event-agents.md) | Event-driven agent workloads: the tool contract, fleet placement, and the host-side response pattern. |
-| [Runtime provisioning](runtime-provisioning.md) | Runtime homes, state generations, build/runtime separation, guest init, and provisioning contracts. |
-| [Secrets](secrets.md) | SOPS workflow, credential exposure, and the secrets threat model. |
-| [Signing keys](signing-keys.md) | Explicit encrypted Ed25519 provisioning and public-key export without granting workload authority. |
+| [Nix purity](nix-purity.md) and [development shells](nix/devshells.md) | Source/build separation and pinned shell behavior. |
+| [Testing](testing.md) | Repository checks, properties, regressions, and VM acceptance. |
+| [Agent test environment](agent-test-env.md) | KVM, Lix, the pinned CLI, and verification-container setup. |
+| [CI and release foundation](ci-release-foundation.md) | Check selection, required gates, and release qualification. |
+| [GitHub governance](github-governance.md) | Repository protections and their activation sequence. |
+| [Beads contract](../BEADS.md) and [tracker](../.beads/README.md) | Work tracking, acceptance criteria, and dependencies. |
+| [Security reporting](../SECURITY.md) | Private vulnerability reporting and disclosure. |
+| [Presentation assets](assets/README.md) | README artwork and editing conventions. |
 
-## Change and validate
-
-| Document | Owns |
-| :--- | :--- |
-| [Contributing](../CONTRIBUTING.md) | Integration, review, tests, and repository hygiene. |
-| [Security reporting](../SECURITY.md) | Vulnerability reporting and disclosure guidance. |
-| [Testing](testing.md) | Repository checks, properties, regressions, and separate VM acceptance. |
-| [Agent test environment](agent-test-env.md) | KVM, Lix, pinned CLI, and disk/PATH caveats in verification containers. |
-| [CI and release foundation](ci-release-foundation.md) | Check selection, required gates, and release boundaries. |
-| [GitHub governance](github-governance.md) | Proposed protections and their activation sequence. |
-| [Repository audit](repository-audit-2026-09-11.md) | Dated consolidation findings, fixes, and remaining work. |
-| [Beads contract](../BEADS.md) / [tracker](../.beads/README.md) | Work tracking, acceptance criteria, and dependencies. |
-| [Presentation assets](assets/README.md) | Light/dark README artwork and editing constraints. |
-
-## Keep the layers distinct
-
-The root human README explains what the project is and how to approach it.
-The agent README provides a selective architectural map and technical reference.
-Detailed procedures, contracts, and rationale stay with the focused guides above.
-Working instructions stay in the applicable `AGENTS.md` files.
-
-When changing a contract, update its owning document and the relevant entry-point
-summary or link. Prefer links to duplicate specifications. A proposal, an accepted
-decision, an implemented interface, and a measured runtime property are different
-kinds of evidence; name which one a document supplies.
+For the dated consolidation findings and follow-up work, see the
+[repository audit](repository-audit-2026-09-11.md).
