@@ -1,56 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="270" viewBox="0 0 1200 270" role="img" aria-labelledby="title desc">
   <title id="title">workestrate / rybskiworks</title>
-  <desc id="desc">Systems that let software act. Declarative configuration feeds a shared control plane and individual agent and service microVMs. Workestrate resolves configuration and manages the lifecycle of each workload.</desc>
+  <desc id="desc">A workspace for software. One fleet definition supplies individual agent and service microVMs.</desc>
   <defs>
     <linearGradient id="ink" x1="44" y1="0" x2="1156" y2="0" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#255bbd"/><stop offset=".3" stop-color="#b3435d"/><stop offset=".65" stop-color="#b3435d"/><stop offset="1" stop-color="#255bbd"/>
+      <stop stop-color="#255bbd"/><stop offset=".45" stop-color="#b3435d"/><stop offset="1" stop-color="#255bbd"/>
     </linearGradient>
-    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#c3cdd9"/></pattern>
   </defs>
-  <rect x="1" y="1" width="1198" height="398" rx="18" fill="#faf9f6" stroke="#d1d9e2"/>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379" letter-spacing="1.2">
-    <text x="46" y="44">rybskiworks / execution systems</text>
-    <text x="1154" y="44" text-anchor="end">intent becomes a working environment</text>
-  </g>
+  <rect x="1" y="1" width="1198" height="268" rx="18" fill="#faf9f6" stroke="#d1d9e2"/>
+  <text x="46" y="39" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="14" letter-spacing="1.2" fill="#536379">rybskiworks</text>
   <g font-family="Arial, Helvetica, sans-serif">
-    <text x="42" y="150" font-size="88" font-weight="700" letter-spacing="-4.5" fill="url(#ink)">workestrate</text>
-    <text x="46" y="218" font-size="35" letter-spacing="-.8" fill="#192334">systems that let</text>
-    <text x="46" y="260" font-size="35" letter-spacing="-.8" fill="#192334">software act.</text>
+    <text x="42" y="130" font-size="84" font-weight="700" letter-spacing="-4" fill="url(#ink)">workestrate</text>
+    <text x="46" y="177" font-size="29" letter-spacing="-.6" fill="#192334">a workspace for software.</text>
   </g>
-  <text x="46" y="311" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379">agent-first / workload-agnostic</text>
-  <rect x="650" y="78" width="504" height="248" rx="12" fill="url(#dots)" opacity=".55"/>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="12" fill="#536379">
-    <text x="674" y="106">configuration</text>
-    <text x="1130" y="106" text-anchor="end">policy / images / bindings</text>
+  <text x="46" y="224" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="16" fill="#536379">TOML / Nix / microVMs</text>
+  <rect x="674" y="54" width="456" height="50" rx="9" fill="#f1f3f6" stroke="#d1d9e2"/>
+  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace">
+    <text x="692" y="85" font-size="18" fill="#192334">workestrate.toml</text>
+    <text x="1112" y="84" text-anchor="end" font-size="14" fill="#536379">your fleet</text>
   </g>
-  <path d="M902 114V134" fill="none" stroke="url(#ink)" stroke-width="2"/>
-  <rect x="674" y="134" width="456" height="40" rx="8" fill="#f1f3f6" stroke="#d1d9e2"/>
-  <circle cx="696" cy="154" r="4" fill="url(#ink)"/>
-  <text x="711" y="159" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="15" fill="#192334">workestrate</text>
-  <text x="1112" y="158" text-anchor="end" font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="12" fill="#536379">resolve / plan / run</text>
-  <path d="M902 174V214M902 190H756Q740 190 740 206V214M902 190H1048Q1064 190 1064 206V214" fill="none" stroke="url(#ink)" stroke-width="2"/>
-  <circle cx="902" cy="190" r="4" fill="#faf9f6" stroke="url(#ink)" stroke-width="2"/>
+  <path d="M902 104V144M902 124H756Q740 124 740 140V144M902 124H1048Q1064 124 1064 140V144" fill="none" stroke="url(#ink)" stroke-width="2"/>
+  <circle cx="902" cy="124" r="4" fill="#faf9f6" stroke="url(#ink)" stroke-width="2"/>
   <g fill="#faf9f6" stroke="#d1d9e2">
-    <rect x="674" y="214" width="132" height="91" rx="9"/>
-    <rect x="836" y="214" width="132" height="91" rx="9"/>
-    <rect x="998" y="214" width="132" height="91" rx="9"/>
+    <rect x="674" y="144" width="132" height="90" rx="9"/>
+    <rect x="836" y="144" width="132" height="90" rx="9"/>
+    <rect x="998" y="144" width="132" height="90" rx="9"/>
   </g>
   <g fill="none" stroke="url(#ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M688 229l5 5-5 5m10 0h10M850 229h18v12h-18zM857 241v5m-5 0h10M1012 229l5 5-5 5m10 0h10"/>
+    <path d="M690 160l5 5-5 5m10 0h10M852 159h18v12h-18zM859 171v4m-5 0h10M1014 160l5 5-5 5m10 0h10"/>
   </g>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="11" fill="#536379" text-anchor="end">
-    <text x="793" y="239">01</text><text x="955" y="239">02</text><text x="1117" y="239">03</text>
+  <g font-family="Arial, Helvetica, sans-serif" font-size="23" fill="#192334">
+    <text x="690" y="197">agent</text><text x="852" y="197">service</text><text x="1014" y="197">agent</text>
   </g>
-  <g font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#192334">
-    <text x="688" y="267">agent</text><text x="850" y="267">service</text><text x="1012" y="267">agent</text>
-  </g>
-  <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="11" fill="#536379">
-    <text x="688" y="289">microVM</text><text x="850" y="289">microVM</text><text x="1012" y="289">microVM</text>
-    <text x="902" y="334" text-anchor="middle" font-size="12">shared control / individual workloads</text>
-  </g>
-  <path d="M46 353H1154" stroke="#d1d9e2"/>
   <g font-family="ui-monospace, 'DejaVu Sans Mono', monospace" font-size="13" fill="#536379">
-    <text x="46" y="379">rust / nix / microvms</text>
-    <text x="1154" y="379" text-anchor="end">explicit intent. bounded execution.</text>
+    <text x="690" y="219">microVM</text><text x="852" y="219">microVM</text><text x="1014" y="219">microVM</text>
   </g>
 </svg>

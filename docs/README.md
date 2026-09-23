@@ -1,44 +1,65 @@
 # Workestrate documentation
 
-[What is Workestrate?](../README.md) · [Get started](getting-started.md) ·
-[CLI guide](cli.md) · [Architecture and source map](../README.agents.md)
+[Overview](../README.md) · [Install](install/README.md) ·
+[First workload](getting-started.md) · [CLI reference](cli.md)
 
-## Set up and run workloads
+<a id="set-up-and-run-workloads"></a>
 
-| I want to… | Read |
-| :--- | :--- |
-| Install Workestrate and run my first workload | [Getting started](getting-started.md), including a [setup checklist](getting-started.md#setup-checklist) for humans and agents. |
-| Find a command, flag, or fleet selector | [CLI guide](cli.md). |
-| Define workloads and build their images | [Workload layouts](workloads.md). |
-| Manage instances, ports, and teardown | [Operating model](operating-model.md). |
-| Provision or update credentials | [Secrets](secrets.md) and [signing keys](signing-keys.md). |
-| Configure event-driven agents | [Event agents](event-agents.md). |
-| Inspect runtime state or provision a host | [Runtime provisioning](runtime-provisioning.md). |
+## Start here
+
+[**Choose your installation path**](install/README.md):
+[Linux](install/linux.md), [NixOS](install/nixos.md), or the
+[Windows detour](install/windows.md).
+
+[**Run your first workload**](getting-started.md): connect a fleet, provision
+secrets, inspect a plan, and launch. The
+[setup checklist](getting-started.md#setup-checklist) works for humans and agents.
+
+[**Find a command**](cli.md): command families, flags, fleet selection, and
+examples for everyday use.
+
+## Work with fleets
+
+- [Define workloads](workloads.md): configuration layouts and image builds.
+- [Manage instances](operating-model.md): identity, ports, and teardown.
+- [Manage secrets](secrets.md) and [signing keys](signing-keys.md).
+- [Configure event agents](event-agents.md).
+- [Provision the runtime](runtime-provisioning.md): host setup and state generations.
 
 ## Understand the system
 
-| Document | Covers |
-| :--- | :--- |
-| [Architecture and source map](../README.agents.md) | Vocabulary, component ownership, configuration flow, and task-to-code navigation. |
-| [Specification map](../SPEC.md) | Maintained system contracts and their owners. |
-| [Target specification](migration/20-target-system-spec.md) | Detailed configuration, CLI, seed, and lifecycle semantics. |
-| [Security model](migration/30-security-model.md) | Policy layering, trust, and authority boundaries. |
-| [Architecture decisions](migration/50-decisions/README.md) | Design rationale, decision status, and supersession. |
+- [Architecture and source map](../README.agents.md): concepts, ownership, and
+  task-to-code navigation.
+- [Specification map](../SPEC.md): maintained contracts and their owners.
+- [Security model](migration/30-security-model.md): policy, trust, and authority.
+- [Architecture decisions](migration/50-decisions/README.md): design rationale
+  and decision status.
 
-## Build, test, and contribute
+The [target specification](migration/20-target-system-spec.md) covers detailed
+configuration, CLI, seed, and lifecycle semantics.
 
-| Document | Covers |
-| :--- | :--- |
-| [Contributing](../CONTRIBUTING.md) and [repository instructions](../AGENTS.md) | Branches, review, required checks, and working conventions. |
-| [Nix build ownership](nix-build.md) | Toolchain inputs, SDK pairing, packaging, and verification entry points. |
-| [Nix purity](nix-purity.md) and [development shells](nix/devshells.md) | Source/build separation and pinned shell behavior. |
-| [Testing](testing.md) | Repository checks, properties, regressions, and VM acceptance. |
-| [Agent test environment](agent-test-env.md) | KVM, Lix, the pinned CLI, and verification-container setup. |
-| [CI and release foundation](ci-release-foundation.md) | Check selection, required gates, and release qualification. |
-| [GitHub governance](github-governance.md) | Repository protections and their activation sequence. |
-| [Beads contract](../BEADS.md) and [tracker](../.beads/README.md) | Work tracking, acceptance criteria, and dependencies. |
-| [Security reporting](../SECURITY.md) | Private vulnerability reporting and disclosure. |
-| [Presentation assets](assets/README.md) | README artwork and editing conventions. |
+<a id="build-test-and-contribute"></a>
 
-For the dated consolidation findings and follow-up work, see the
-[repository audit](repository-audit-2026-09-11.md).
+## Contribute
+
+Start with [Contributing](../CONTRIBUTING.md) and the
+[repository instructions](../AGENTS.md) for the development workflow and required
+checks.
+
+- [Build with Nix](nix-build.md): toolchains, SDK pairing, and packaging.
+- [Development shells](nix/devshells.md) and [Nix purity](nix-purity.md): pinned
+  environments and source/build separation.
+- [Test changes](testing.md): repository checks, regressions, and VM acceptance.
+- [Agent test environment](agent-test-env.md): KVM, Lix, and verification containers.
+- [Presentation assets](assets/README.md): README artwork and editing conventions.
+
+<details>
+<summary>Project maintenance and governance</summary>
+
+- [CI and release foundation](ci-release-foundation.md): gates and release qualification.
+- [GitHub governance](github-governance.md): repository protections.
+- [Beads contract](../BEADS.md) and [tracker](../.beads/README.md): work tracking and acceptance criteria.
+- [Security reporting](../SECURITY.md): private vulnerability disclosure.
+- [Repository audit](repository-audit-2026-09-11.md): dated findings and follow-up work.
+
+</details>
