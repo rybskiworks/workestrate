@@ -3,11 +3,9 @@
 <a href="https://github.com/rybskiworks">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workestrate-dark.svg">
-    <img src="docs/assets/workestrate-light.svg" width="1200" alt="Workestrate: one fleet definition, individual microVMs for your agents and services.">
+    <img src="docs/assets/workestrate-light.svg" width="1200" alt="Workestrate: declarative configuration, a shared control plane, and individual microVMs for agents and services.">
   </picture>
 </a>
-
-<p align="center"><samp>give the machine somewhere to work.</samp></p>
 
 <p align="center">
   <samp>
@@ -18,22 +16,29 @@
   </samp>
 </p>
 
-Workestrate runs agents and services in **individual microVMs**, from a fleet you
-keep in Git. Bring a coding agent, its development services, or a workspace for a
-particular job. Define the environment once; launch it from your terminal.
+Workestrate runs **agents and the services they depend on** in individual
+microVMs. Define the tools, files, network access, and credentials each workload
+needs in a fleet you keep in Git. Inspect the plan, start the services, and attach
+to an agent from one CLI.
 
 <a id="positioning"></a>
 <a id="one-control-plane-explicit-boundaries"></a>
 
-**Your tools, with a home of their own.** TOML describes workloads and access
-policy. Nix pins the toolchain and supplies image-building recipes. Microsandbox
-runs the VMs. Your fleet chooses the applications, mounts, and credential bindings.
+TOML describes your workloads and how they fit together. Nix pins the toolchain
+and supplies image-building recipes. Microsandbox runs the VMs.
 
 <a id="how-it-works-today"></a>
 <a id="define-plan-run"></a>
 <a id="a-small-cli-surface-for-a-larger-system"></a>
 
 ## A fleet, in a few commands
+
+<a href="docs/getting-started.md">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/operating-loop-dark.svg">
+    <img src="docs/assets/operating-loop-light.svg" width="1200" alt="Setup workflow: connect a fleet, inspect its workloads, prepare credentials and host, then run agents and services. Open the setup guide.">
+  </picture>
+</a>
 
 With a configured fleet called `dev` and an agent called `coder`, start its
 services and open the agent:
@@ -72,7 +77,7 @@ logs, parallel instances, image builds, and the rest of the interface.
 <a id="take-a-look"></a>
 <a id="install-the-tool"></a>
 
-## Make yourself at home
+## Get started
 
 Workestrate currently targets **x86_64 Linux with KVM**. Choose your installation
 path for the CLI and host setup:

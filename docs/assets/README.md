@@ -1,8 +1,9 @@
 # README artwork
 
-The compact `workestrate-{light,dark}.svg` hero shows a fleet feeding individual
-workload VMs. `operating-loop-{light,dark}.svg` illustrates the setup walkthrough.
-The [installation hub](../install/README.md) links that workflow to the guide.
+The `workestrate-{light,dark}.svg` hero shows declarative configuration flowing
+through Workestrate to individual agent and service microVMs.
+`operating-loop-{light,dark}.svg` illustrates the setup walkthrough and links to
+the guide from the [main README](../../README.md).
 
 Edit the SVGs directly. GitHub selects the palette through `<picture>`; other
 renderers use the light image. Keep both variants' geometry and wording in sync.

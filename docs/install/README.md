@@ -19,11 +19,4 @@ A short detour through Linux, with an experimental WSL option for the curious.
 
 ## Once installed
 
-<a href="../getting-started.md#configuration">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/operating-loop-dark.svg">
-    <img src="../assets/operating-loop-light.svg" width="1200" alt="Connect a fleet, inspect its plan, prepare credentials and the host, then run. Open the setup walkthrough.">
-  </picture>
-</a>
-
 [Set up a fleet and run your first workload →](../getting-started.md#configuration)
