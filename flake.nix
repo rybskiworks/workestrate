@@ -3,7 +3,7 @@
 
   inputs = {
     # Shared build tools and development modules have one version authority.
-    tooling.url = "github:rybskiworks/nix-tooling/a403c2c111e24db64feb5748bbba939308048c07";
+    tooling.url = "github:rybskiworks/nix-tooling/067513af5c10181e85e4bcb60cf31c880c4c53cb";
     nixpkgs.follows = "tooling/nixpkgs";
     fenix.follows = "tooling/fenix";
     flake-parts.follows = "tooling/flake-parts";
@@ -173,6 +173,15 @@
             };
         in
         {
+          nixosModules = {
+            workestrate = import ./nix/nixos/workestrate.nix { packages = inputs.self.packages; };
+            workestrateHost = {
+              imports = [
+                inputs.self.nixosModules.workestrate
+                ./nix/nixos/runtime.nix
+              ];
+            };
+          };
           lib = {
             "x86_64-linux" = mkLibFor "x86_64-linux";
           };
@@ -236,6 +245,34 @@
               inputs.self.shortRev
                 or (if inputs.self ? rev then builtins.substring 0 8 inputs.self.rev else "dirty");
           };
+
+          workestrateClosure = inputs.tooling.lib.guest.mkClosureExport {
+            inherit pkgs;
+            name = "workestrate-closure";
+            roots = [ workestrate ];
+          };
+          mkWorkestrateNixosBase =
+            name: externalClosures:
+            inputs.tooling.lib.guest.mkNixosImage {
+              inherit pkgs name externalClosures;
+              tag = "latest";
+              stateVersion = "26.05";
+              maxLayers = 64;
+              modules = [
+                inputs.tooling.nixosModules.lixGuest
+                inputs.self.nixosModules.workestrate
+                {
+                  programs.workestrate = {
+                    enable = true;
+                    package = workestrate;
+                  };
+                }
+              ];
+            };
+          workestrateNixosBase = mkWorkestrateNixosBase "workestrate-nixos-base" [ ];
+          workestrateNixosSharedBase = mkWorkestrateNixosBase "workestrate-nixos-shared-base" [
+            workestrateClosure
+          ];
 
           msb-wrapped = pkgs.runCommand "msb-wrapped" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
             mkdir -p $out/bin
@@ -431,6 +468,10 @@
           packages = {
             beads = inputs'.tooling.packages.beads;
             broker-image = brokerImage;
+            workestrate-closure = workestrateClosure;
+            workestrate-init-state = workestrate.stateInit;
+            workestrate-nixos-base = workestrateNixosBase;
+            workestrate-nixos-shared-base = workestrateNixosSharedBase;
             inherit
               agentd
               workestrate
@@ -446,6 +487,11 @@
           };
 
           apps = {
+            init-state = {
+              type = "app";
+              program = "${workestrate.stateInit}/bin/workestrate-init-state";
+              meta.description = "Initialize a fresh private state home for the paired runtime";
+            };
             default = {
               type = "app";
               program = "${workestrate}/bin/workestrate";
@@ -466,6 +512,39 @@
           # Expose lib per system for backward compat via `config.packages`? Instead we set `flake.lib` above.
           # For `nix flake check` we also provide tombiCheck and treefmt checks.
           checks = {
+            runtimeState =
+              pkgs.runCommand "workestrate-runtime-state-check"
+                {
+                  nativeBuildInputs = [
+                    pkgs.python3
+                    pkgs.bash
+                    pkgs.coreutils
+                    workestrate.stateInit
+                  ];
+                }
+                ''
+                  mkdir -p source
+                  cp ${./scripts/init-runtime-state.sh} source/init-runtime-state.sh
+                  cp ${./scripts/test-init-runtime-state.py} source/test-init-runtime-state.py
+                  python3 -B source/test-init-runtime-state.py
+                  runtime_test_home=$(mktemp -d /tmp/wsi-XXXXXXXX)
+                  trap 'rm -rf "$runtime_test_home"' EXIT
+                  env -u MSB_HOME HOME="$runtime_test_home" WORKESTRATE_INIT_MSB=/absent \
+                    workestrate-init-state
+                  test "$(readlink "$runtime_test_home/.microsandbox/current")" = 'generations/${
+                    builtins.substring 0 12 (builtins.baseNameOf microsandbox.outPath)
+                  }'
+                  test ! -e "$runtime_test_home/.microsandbox/current/db"
+                  mkdir -p $out
+                '';
+            nixosModules = import ./nix/tests/nixos-modules.nix {
+              inherit pkgs workestrate microsandbox;
+              inherit (inputs) nixpkgs tooling;
+              modules = inputs.self.nixosModules;
+              guest = workestrateNixosBase;
+              sharedGuest = workestrateNixosSharedBase;
+              sharedClosure = workestrateClosure;
+            };
             brokerImage =
               let
                 source = pkgs.lib.fileset.toSource {

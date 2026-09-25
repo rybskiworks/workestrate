@@ -25,6 +25,7 @@ examples for everyday use.
 - [Manage secrets](secrets.md) and [signing keys](signing-keys.md).
 - [Configure event agents](event-agents.md).
 - [Provision the runtime](runtime-provisioning.md): host setup and state generations.
+- [Compose NixOS images](nixos-images.md): shared host/guest packages and init.
 
 ## Understand the system
 

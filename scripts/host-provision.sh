@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # host-provision.sh — in-flake host provisioner for the workestrate tool.
 #
-# This script is the ONLY supported install path for the nix-installed
-# `workestrate` binary. Do not `nix profile install` by hand outside this
-# script except via the explicit remediation commands it prints.
+# This script owns user-profile installation and runtime convergence. NixOS
+# system installations use the exported modules and explicit state setup;
+# see docs/install/nixos.md. Do not replace a system-managed package here.
 #
 # One idempotent command that:
 #   A. runs scripts/host-check.sh,
