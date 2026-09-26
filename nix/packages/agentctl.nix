@@ -170,6 +170,12 @@ rustPlatform.buildRustPackage {
 
   doCheck = false;
 
+  # Consumers install this package directly, retaining its paired runtime.
+  passthru = {
+    inherit microsandbox;
+    stateInit = import ./runtime-state.nix { inherit pkgs microsandbox; };
+  };
+
   meta = {
     description = "Control plane CLI for the AI workbench";
     mainProgram = "workestrate";

@@ -182,6 +182,8 @@ verify: lock-guard versions-check hooks-check shell-arguments-check sdk-source-c
       .#checks.x86_64-linux.schemaSync \
       .#checks.x86_64-linux.buildRevision \
       .#checks.x86_64-linux.brokerImage \
+      .#checks.x86_64-linux.nixosModules \
+      .#checks.x86_64-linux.runtimeState \
       .#checks.x86_64-linux.deny
     git diff --exit-code HEAD -- control/agentctl/Cargo.lock
     just store-audit
