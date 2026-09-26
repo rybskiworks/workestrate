@@ -1064,6 +1064,15 @@
           "deprecated": true,
           "type": "boolean"
         },
+        "stat_virtualization": {
+          "description": "Metadata virtualization: \"strict\" (default) or \"off\" (literal source metadata). \"off\" requires read-only mode and cannot be combined with owner.",
+          "default": "strict",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MountStatVirtualization"
+            }
+          ]
+        },
         "write": {
           "description": "Mount-policy sugar: the write axis (write admission) directly on the mount row (same shape as `read`; `write.deny = [...]` / `write.allow = [...]`). Parse-time-only, normalized into `policy.write`.",
           "default": null,
@@ -1078,6 +1087,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "MountStatVirtualization": {
+      "description": "Bind-mount metadata handling, independent of read-only access and path policy.",
+      "type": "string",
+      "enum": [
+        "strict",
+        "off"
+      ]
     },
     "MountsFragment": {
       "description": "The raw `[policy.mounts]` fragment one scope declares (spec 22 §15).\n\nEntries hold RAW pattern strings: the compiler validates and compiles them against the declaring origin (spec 22 §6 pattern rejections name the origin), so fragments must not pre-compile patterns. `case_sensitivity` is likewise raw so the compiler can name the offending value and origin in a `CompileError` (spec 22 §6). The former vocabulary (`mask`, `unmask`, `protect`, `writes`, `masked_writes`, entry key `overridable`) is intentionally gone: this pre-release surface rejects those keys as unknown fields rather than silently accepting old policy.",

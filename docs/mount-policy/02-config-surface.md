@@ -119,6 +119,12 @@ Files with existing per-file virtual stat overrides retain those overrides.
 See [guest ownership of bind mounts](../runtime-provisioning.md#guest-ownership-of-bind-mounts)
 for accepted values, layer replacement and create-time behavior.
 
+`stat_virtualization = "off"` instead preserves the source filesystem's visible
+metadata; the default is `"strict"`. Off requires `mode = "ro"`, is incompatible
+with `owner`, and does not change read-only or path-policy enforcement. See
+[re-exporting a read-only bind mount](../runtime-provisioning.md#re-exporting-a-read-only-bind-mount)
+for the nested mount use case and its metadata limitations.
+
 ## The pattern dialect
 
 Mount-root-relative globs (fork `mount_policy/pattern.rs`; the tool's mirror

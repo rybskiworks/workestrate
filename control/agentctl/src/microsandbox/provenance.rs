@@ -280,6 +280,22 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
         s.push(REC);
     }
 
+    // Record only non-default metadata views, retaining existing hashes.
+    if plan
+        .mounts
+        .iter()
+        .any(|m| m.stat_virtualization != super::plan::MountStatVirtualization::Strict)
+    {
+        s.push_str("mount_stat_virtualization");
+        for (index, mount) in plan.mounts.iter().enumerate() {
+            if mount.stat_virtualization != super::plan::MountStatVirtualization::Strict {
+                s.push(UNIT);
+                s.push_str(&format!("{index}:{}", mount.stat_virtualization));
+            }
+        }
+        s.push(REC);
+    }
+
     // 9. network — canonical, sorted.
     s.push_str("network");
     s.push(UNIT);
@@ -589,8 +605,31 @@ mod tests {
             mode,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }
+    }
+
+    #[test]
+    fn mount_stat_virtualization_changes_only_explicit_mount_identity() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::MountStatVirtualization;
+
+        let mut plan = empty_plan();
+        plan.mounts = vec![mount("/data", "/mnt", MountMode::Ro); 2];
+        let baseline = canonical_plan_bytes(&plan);
+        assert!(!baseline.contains("mount_stat_virtualization"));
+        plan.mounts[0].stat_virtualization = MountStatVirtualization::Off;
+        let first = config_hash_of_plan(&plan);
+        assert_ne!(canonical_plan_bytes(&plan), baseline);
+        assert!(canonical_plan_bytes(&plan).contains("mount_stat_virtualization\u{1f}0:off"));
+        let decoded: SandboxPlan = serde_json::from_value(serde_json::to_value(&plan)?)?;
+        assert_eq!(config_hash_of_plan(&decoded), first);
+        plan.mounts[0].stat_virtualization = MountStatVirtualization::Strict;
+        plan.mounts[1].stat_virtualization = MountStatVirtualization::Off;
+        assert_ne!(config_hash_of_plan(&plan), first);
+        plan.mounts[1].stat_virtualization = MountStatVirtualization::Strict;
+        assert_eq!(canonical_plan_bytes(&plan), baseline);
+        Ok(())
     }
 
     #[test]
@@ -765,6 +804,7 @@ mod tests {
             mode: MountMode::Rw,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: Some(std::path::PathBuf::from("inst/slug.json")),
         }];
         let mut untokened = empty_plan();

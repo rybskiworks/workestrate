@@ -196,6 +196,25 @@ impl fmt::Display for MountMode {
     }
 }
 
+/// Bind-mount metadata handling, independent of read-only access and path policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum MountStatVirtualization {
+    #[default]
+    Strict,
+    Off,
+}
+
+impl fmt::Display for MountStatVirtualization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Strict => f.write_str("strict"),
+            Self::Off => f.write_str("off"),
+        }
+    }
+}
+
 /// Fallback guest ownership for bind-mounted files without per-file stat overrides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -269,6 +288,7 @@ pub struct MountPlan {
     pub host: String,
     pub guest: String,
     pub mode: MountMode,
+    pub stat_virtualization: MountStatVirtualization,
     /// Optional guest fallback owner; native per-file stat overrides take precedence.
     pub owner: Option<MountOwner>,
     /// Mount-entry policy is collected from the same declaring layer as this
@@ -282,6 +302,21 @@ impl MountPlan {
     /// removed `read_only: bool` field at all internal call sites.
     pub fn is_read_only(&self) -> bool {
         self.mode == MountMode::Ro
+    }
+
+    pub(crate) fn validate_stat_virtualization(&self) -> Result<(), &'static str> {
+        if self.stat_virtualization == MountStatVirtualization::Off {
+            if !self.is_read_only() {
+                return Err("mount stat_virtualization = \"off\" requires mode = \"ro\"");
+            }
+            if self.owner.is_some() {
+                return Err(
+                    "mount stat_virtualization = \"off\" cannot be combined with owner; \
+                     literal source metadata does not support guest owner overrides",
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -302,6 +337,10 @@ struct MountPlanWire {
     /// Mount access mode: "ro" (read-only) or "rw" (read-write, the default).
     #[serde(default)]
     mode: Option<MountMode>,
+    /// Metadata virtualization: "strict" (default) or "off" (literal source
+    /// metadata). "off" requires read-only mode and cannot be combined with owner.
+    #[serde(default)]
+    stat_virtualization: MountStatVirtualization,
     /// DEPRECATED alias for `mode` (`true` ≡ "ro", `false` ≡ "rw"); accepted
     /// at parse time with a deprecation warning, never serialized.
     #[serde(default)]
@@ -403,14 +442,17 @@ impl TryFrom<MountPlanWire> for MountPlan {
                 target.allow.extend(write.allow);
             }
         }
-        Ok(Self {
+        let mount = Self {
             host: wire.host,
             guest: wire.guest,
             mode,
+            stat_virtualization: wire.stat_virtualization,
             owner: wire.owner,
             policy,
             policy_file: wire.policy_file,
-        })
+        };
+        mount.validate_stat_virtualization()?;
+        Ok(mount)
     }
 }
 
@@ -431,9 +473,12 @@ impl Serialize for MountPlan {
     {
         use serde::ser::SerializeStruct;
         // Canonical form only: `mode` is always emitted; `read_only` is NEVER
-        // serialized. `owner`/`policy`/`policy_file` stay skip-when-None so plan JSON
-        // without them is byte-identical to the legacy form.
+        // serialized. Default stat virtualization and absent optional fields
+        // are omitted so existing plan JSON remains byte-identical.
         let mut n = 3;
+        if self.stat_virtualization != MountStatVirtualization::Strict {
+            n += 1;
+        }
         if self.owner.is_some() {
             n += 1;
         }
@@ -447,6 +492,9 @@ impl Serialize for MountPlan {
         s.serialize_field("host", &self.host)?;
         s.serialize_field("guest", &self.guest)?;
         s.serialize_field("mode", &self.mode)?;
+        if self.stat_virtualization != MountStatVirtualization::Strict {
+            s.serialize_field("stat_virtualization", &self.stat_virtualization)?;
+        }
         if let Some(owner) = &self.owner {
             s.serialize_field("owner", owner)?;
         }
@@ -880,6 +928,9 @@ impl fmt::Display for SandboxPlan {
             if let Some(owner) = m.owner {
                 writeln!(f, "  owner: uid={} gid={}", owner.uid, owner.gid)?;
             }
+            if m.stat_virtualization != MountStatVirtualization::Strict {
+                writeln!(f, "  stat_virtualization: {}", m.stat_virtualization)?;
+            }
             if let Some(pf) = &m.policy_file {
                 writeln!(f, "  policy_file: {}", pf.display())?;
             }
@@ -1186,6 +1237,7 @@ mod tests {
                     mode: MountMode::Rw,
                     policy: None,
                     owner: None,
+                    stat_virtualization: Default::default(),
                     policy_file: None,
                 },
                 MountPlan {
@@ -1194,6 +1246,7 @@ mod tests {
                     mode: MountMode::Ro,
                     policy: None,
                     owner: None,
+                    stat_virtualization: Default::default(),
                     policy_file: None,
                 },
             ],

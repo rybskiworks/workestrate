@@ -2587,6 +2587,7 @@ mod tests {
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             }];
             p.ports = vec![PortMapping::new(4000, 4000)];

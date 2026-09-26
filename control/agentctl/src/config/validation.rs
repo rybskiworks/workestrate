@@ -1304,6 +1304,7 @@ pub(crate) mod tests {
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             },
             crate::microsandbox::plan::MountPlan {
@@ -1312,6 +1313,7 @@ pub(crate) mod tests {
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             },
         ];
@@ -1330,6 +1332,7 @@ pub(crate) mod tests {
             mode: crate::microsandbox::plan::MountMode::Rw,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: Some(std::path::PathBuf::from("/some/path")),
         }];
         let err = validate_config(&config).unwrap_err().to_string();
@@ -2109,6 +2112,7 @@ egress = "deny"
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             }];
             svc.seed_files[0].target = "work/x.json".to_string();
@@ -2133,6 +2137,7 @@ egress = "deny"
                 mode: crate::microsandbox::plan::MountMode::Ro,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             }];
             svc.seed_files[0].target = "workloads/svc/config/app.json".to_string();
@@ -2153,6 +2158,7 @@ egress = "deny"
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             }];
         }
@@ -2176,6 +2182,7 @@ egress = "deny"
                 mode: crate::microsandbox::plan::MountMode::Rw,
                 policy: None,
                 owner: None,
+                stat_virtualization: Default::default(),
                 policy_file: None,
             }];
             svc.seed_files[0].target = "workspaces/svc-state/x.json".to_string();
@@ -2382,6 +2389,7 @@ egress = "deny"
             mode: MountMode::Ro,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         };
         let json = serde_json::to_value(&mount).unwrap();
