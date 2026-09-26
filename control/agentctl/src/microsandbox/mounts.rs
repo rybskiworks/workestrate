@@ -562,7 +562,9 @@ mod tests {
     use super::{MountRoots, ensure_mount_sources, preflight_existence, resolve_mount_host};
     use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
-    use crate::microsandbox::plan::{MountMode, MountPlan, NetworkPlan, SandboxPlan};
+    use crate::microsandbox::plan::{
+        MountMode, MountPlan, MountStatVirtualization, NetworkPlan, SandboxPlan,
+    };
 
     // ---- ADR 0030 V-addendum §V2: instance-scoped state paths ----
 
@@ -754,7 +756,10 @@ mod tests {
 
     #[test]
     fn bind_stat_virtualization_preserves_access_and_policy() -> anyhow::Result<()> {
-        use microsandbox::sandbox::{HostPermissions, VolumeMount};
+        use microsandbox::sandbox::{
+            HostPermissions, MountBuilder, StatVirtualization, VolumeMount,
+        };
+        use std::path::PathBuf;
 
         for (setting, expected, mode) in [
             (
