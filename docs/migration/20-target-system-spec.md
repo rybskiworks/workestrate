@@ -657,6 +657,14 @@ canonical `mode` string.
 declares `mounts` replaces the lower layer's array wholesale). Because the
 alias normalizes at parse time, merged layers only ever carry `mode`.
 
+**Metadata view:** `stat_virtualization = "strict" | "off"` is independent of
+`mode` and path policy. Omission means Strict and is serialized identically to
+explicit Strict. Off presents literal source metadata, requires read-only mode,
+and cannot be combined with `owner`; it is retained in plan JSON/text and
+configuration identity.
+See [re-exporting read-only binds](../runtime-provisioning.md#re-exporting-a-read-only-bind-mount)
+for ownership behavior and create-time application.
+
 ### Spec-example CI guard (`# spec-test: skip`)
 
 Every fenced `toml` block in this spec is exercised by

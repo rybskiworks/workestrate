@@ -184,6 +184,45 @@ instance explicitly to change its view, preserving its state first. This field
 does not migrate existing virtual ownership metadata or prove that an application
 can read/write its data; validate the exact guest service separately.
 
+## Re-exporting a read-only bind mount
+
+`stat_virtualization` selects how a bind mount presents ownership, permissions
+and file types. Its accepted values are `"strict"` (the default) and `"off"`.
+Strict uses native virtual metadata and requires readable metadata xattrs for
+read-only mounts, or writable metadata xattrs for read-write mounts. Off uses
+the metadata visible on the source filesystem without reading or applying a
+virtual stat overlay. Off requires `mode = "ro"` and cannot be combined with
+`owner`; omitting mode selects `"rw"` and is therefore rejected with Off.
+
+A workload running Workestrate can re-export an existing read-only bind by
+selecting Off on the inner mount:
+
+```toml
+[[workloads.nested.mounts]]
+host = "${CWD}/fixture"
+guest = "/fixture"
+mode = "ro"
+stat_virtualization = "off"
+```
+
+The outer mount hides its internal stat-override xattr from the guest. An inner
+Strict mount therefore cannot probe that xattr. Off lets the inner mount use
+the ownership and modes already presented by the outer filesystem. Keep the
+outer mount's default Strict setting and set Off only on the re-export that
+needs this behavior. This does not make unreadable source files readable,
+grant host ownership changes, or expose the hidden xattr.
+
+Access mode and path policy remain independent: `mode = "ro"` still refuses
+data and metadata writes, and mount policy still filters paths. Writable binds
+require Strict: native Off can change real source permissions rather than
+virtualizing them, so Workestrate does not admit that combination.
+
+Omitted and explicit Strict settings preserve existing plan bytes and
+configuration hashes. Off appears in both plan formats and changes the mount's
+configuration identity. Replacing a mount array without the setting restores
+Strict. As with `owner`, this is a create-time setting: explicitly recreate an
+owned instance to apply it, preserving its state first.
+
 ## Immutable build inputs are not runtime homes
 
 Nix builds and the default development shell supply the SDK with

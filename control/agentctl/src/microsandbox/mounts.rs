@@ -1,6 +1,6 @@
-use super::plan::{MountPlan, SandboxPlan};
+use super::plan::{MountPlan, MountStatVirtualization, SandboxPlan};
 use anyhow::Result;
-use microsandbox::sandbox::{MountBuilder, SandboxBuilder};
+use microsandbox::sandbox::{MountBuilder, SandboxBuilder, StatVirtualization};
 use std::path::{Component, Path, PathBuf};
 
 /// Roots for resolving mount hosts (F1/F2 — spec 17 path resolution).
@@ -190,6 +190,8 @@ pub(crate) fn apply_plan_mounts(
 ) -> Result<SandboxBuilder> {
     let mut b = builder;
     for m in &plan.mounts {
+        m.validate_stat_virtualization()
+            .map_err(anyhow::Error::msg)?;
         let host = resolve_mount_host(roots, &m.host)?;
         b = b.volume(&m.guest, |v| configure_bind_mount(v, host, m));
     }
@@ -198,12 +200,16 @@ pub(crate) fn apply_plan_mounts(
 
 fn configure_bind_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountBuilder {
     let v = v.bind(host);
+    let v = v.stat_virtualization(match m.stat_virtualization {
+        MountStatVirtualization::Strict => StatVirtualization::Strict,
+        MountStatVirtualization::Off => StatVirtualization::Off,
+    });
     let v = match m.owner {
         Some(owner) => v.owner(owner.uid, owner.gid),
         None => v,
     };
     // The compiled policy token is resolved beneath the approved MSB_HOME root.
-    // Preserve native stat virtualization and host-permission defaults.
+    // Keep the native host-permission setting; Off is admitted only read-only.
     let v = match &m.policy_file {
         Some(pf) => v.mount_policy(pf),
         None => v,
@@ -705,6 +711,7 @@ mod tests {
                     guest: "/data".into(),
                     mode,
                     owner,
+                    stat_virtualization: Default::default(),
                     policy: None,
                     policy_file: Some("instance/data.json".into()),
                 };
@@ -746,6 +753,104 @@ mod tests {
     }
 
     #[test]
+    fn bind_stat_virtualization_preserves_access_and_policy() -> anyhow::Result<()> {
+        use microsandbox::sandbox::{HostPermissions, VolumeMount};
+
+        for (setting, expected, mode) in [
+            (
+                MountStatVirtualization::Strict,
+                StatVirtualization::Strict,
+                MountMode::Ro,
+            ),
+            (
+                MountStatVirtualization::Strict,
+                StatVirtualization::Strict,
+                MountMode::Rw,
+            ),
+            (
+                MountStatVirtualization::Off,
+                StatVirtualization::Off,
+                MountMode::Ro,
+            ),
+        ] {
+            let row = MountPlan {
+                host: "fixture".into(),
+                guest: "/fixture".into(),
+                mode,
+                stat_virtualization: setting,
+                owner: None,
+                policy: None,
+                policy_file: Some("instance/fixture.json".into()),
+            };
+            let built = super::configure_bind_mount(
+                MountBuilder::new("/fixture"),
+                PathBuf::from("/fixture"),
+                &row,
+            )
+            .build()?;
+            let VolumeMount::Bind {
+                host,
+                guest,
+                options,
+                stat_virtualization,
+                host_permissions,
+                follow_root_symlinks,
+                mount_policy,
+                ..
+            } = built
+            else {
+                anyhow::bail!("expected native bind mount");
+            };
+            assert_eq!(host, PathBuf::from("/fixture"));
+            assert_eq!(guest, "/fixture");
+            assert_eq!(stat_virtualization, expected);
+            assert_eq!(options.readonly, mode == MountMode::Ro);
+            assert_eq!(options.override_uid, None);
+            assert_eq!(options.override_gid, None);
+            assert_eq!(host_permissions, HostPermissions::Private);
+            assert!(!follow_root_symlinks);
+            assert_eq!(mount_policy, row.policy_file);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_literal_metadata_is_rejected_before_sdk_forwarding() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::MountOwner;
+
+        let root = tempfile::tempdir()?;
+        for (mode, owner, diagnostic) in [
+            (MountMode::Rw, None, "requires mode = \"ro\""),
+            (
+                MountMode::Ro,
+                Some(MountOwner { uid: 0, gid: 0 }),
+                "cannot be combined with owner",
+            ),
+        ] {
+            let plan = minimal_plan(vec![MountPlan {
+                host: "fixture".into(),
+                guest: "/fixture".into(),
+                mode,
+                stat_virtualization: MountStatVirtualization::Off,
+                owner,
+                policy: None,
+                policy_file: None,
+            }]);
+            let result = super::apply_plan_mounts(
+                microsandbox::Sandbox::builder("bind-metadata-test"),
+                &roots_for(root.path(), None, None),
+                &plan,
+            );
+            let Err(error) = result else {
+                anyhow::bail!("invalid literal metadata reached the SDK");
+            };
+            assert!(error.to_string().contains(diagnostic));
+        }
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
     fn readwrite_mount_sources_are_auto_created() -> anyhow::Result<()> {
         let root = unique_root("rw");
         let plan = minimal_plan(vec![MountPlan {
@@ -754,6 +859,7 @@ mod tests {
             mode: MountMode::Rw,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
 
@@ -782,6 +888,7 @@ mod tests {
             mode: MountMode::Ro,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
 
@@ -1148,6 +1255,7 @@ mod tests {
             mode: MountMode::Ro,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
@@ -1173,6 +1281,7 @@ mod tests {
             mode: MountMode::Rw,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
@@ -1253,6 +1362,7 @@ mod tests {
             mode: MountMode::Ro,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
         let roots = roots_for(&root, None, None);
@@ -1281,6 +1391,7 @@ mod tests {
             mode: MountMode::Ro,
             policy: None,
             owner: None,
+            stat_virtualization: Default::default(),
             policy_file: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
