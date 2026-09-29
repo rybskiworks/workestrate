@@ -244,6 +244,71 @@ impl<'de> Deserialize<'de> for MountOwner {
     }
 }
 
+/// Mount attachment kind (issue #109 — declared disk attachments). The
+/// mount row's default kind is `"bind"` (a virtiofs host-directory mount, the
+/// only kind that existed before), so every pre-existing workload row stays
+/// valid and byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum MountKind {
+    /// Virtiofs host-directory/file mount (the legacy behavior).
+    #[default]
+    Bind,
+    /// Virtio-blk attachment: a disk image FILE (raw/qcow2/vmdk) or an
+    /// operator-allowlisted host block device. Device sources default to
+    /// read-only (see [`MountPlan::readonly`]).
+    Disk,
+}
+
+impl fmt::Display for MountKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MountKind::Bind => write!(f, "bind"),
+            MountKind::Disk => write!(f, "disk"),
+        }
+    }
+}
+
+/// Disk image format for `kind = "disk"` mounts, mirroring the SDK's
+/// `DiskImageFormat` vocabulary. Optional on the wire: when absent the SDK
+/// infers the format from the host path's extension (`.qcow2`/`.vmdk`, else
+/// raw), exactly like `msb --mount-disk`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum DiskFormat {
+    Raw,
+    Qcow2,
+    Vmdk,
+}
+
+impl fmt::Display for DiskFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl DiskFormat {
+    /// CLI-safe lowercase string (`raw` | `qcow2` | `vmdk`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DiskFormat::Raw => "raw",
+            DiskFormat::Qcow2 => "qcow2",
+            DiskFormat::Vmdk => "vmdk",
+        }
+    }
+
+    /// Map to the SDK's `DiskImageFormat` consumed by `MountBuilder::format`.
+    pub fn to_sdk(self) -> microsandbox::sandbox::DiskImageFormat {
+        match self {
+            DiskFormat::Raw => microsandbox::sandbox::DiskImageFormat::Raw,
+            DiskFormat::Qcow2 => microsandbox::sandbox::DiskImageFormat::Qcow2,
+            DiskFormat::Vmdk => microsandbox::sandbox::DiskImageFormat::Vmdk,
+        }
+    }
+}
+
 /// A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`), BOTH the
 /// config shape AND the plan-JSON wire shape. The canonical field is `mode`
 /// ("ro" | "rw", default "rw"); `read_only = <bool>` is accepted as a
@@ -275,13 +340,43 @@ pub struct MountPlan {
     /// row; it is intentionally not part of mount-row merging.
     pub policy: Option<MountsFragment>,
     pub policy_file: Option<std::path::PathBuf>,
+    /// Attachment kind (`"bind"` | `"disk"`, default `"bind"`). Every
+    /// pre-existing row keeps the bind default, so legacy configs and plan
+    /// JSON stay byte-identical.
+    pub kind: MountKind,
+    /// Guest-write budget in MiB for BIND mounts (wired to the SDK's
+    /// `.quota()`). Unset = the SDK's protective default (4096 MiB).
+    /// Valid only for `kind = "bind"` rows.
+    pub quota_mib: Option<u32>,
+    /// Disk image format for `kind = "disk"` rows. Unset = inferred from the
+    /// host extension by the SDK (raw/qcow2/vmdk).
+    pub format: Option<DiskFormat>,
+    /// Inner filesystem type for `kind = "disk"` rows (e.g. `"ext4"`).
+    /// Unset = agentd probes `/proc/filesystems` in the guest.
+    pub fstype: Option<String>,
+    /// Explicit read-only flag for `kind = "disk"` rows. Unset = the
+    /// source-derived default: operator-allowlisted DEVICE sources are
+    /// read-only (fail-closed posture), image files follow `mode`.
+    pub readonly: Option<bool>,
 }
 
 impl MountPlan {
-    /// Canonical internal accessor: `true` iff `mode == "ro"`. Replaces the
-    /// removed `read_only: bool` field at all internal call sites.
+    /// Canonical internal accessor: `true` iff the mount is read-only.
+    /// Replaces the removed `read_only: bool` field at all internal call
+    /// sites.
+    ///
+    /// Bind rows: `true` iff `mode == "ro"` (unchanged).
+    ///
+    /// Disk rows: an explicit `readonly` declaration wins; an
+    /// operator-allowlisted raw block device defaults to read-only even when
+    /// `mode` was left at its default; image files follow `mode`.
     pub fn is_read_only(&self) -> bool {
-        self.mode == MountMode::Ro
+        match self.kind {
+            MountKind::Bind => self.mode == MountMode::Ro,
+            MountKind::Disk => self.readonly.unwrap_or_else(|| {
+                self.mode == MountMode::Ro || super::mounts::is_allowlisted_device(&self.host)
+            }),
+        }
     }
 }
 
@@ -302,6 +397,23 @@ struct MountPlanWire {
     /// Mount access mode: "ro" (read-only) or "rw" (read-write, the default).
     #[serde(default)]
     mode: Option<MountMode>,
+    /// Attachment kind: "bind" (default) or "disk".
+    #[serde(default)]
+    kind: Option<MountKind>,
+    /// Guest-write budget in MiB (bind rows only).
+    #[serde(default)]
+    quota_mib: Option<u32>,
+    /// Disk image format (disk rows only); unset infers from the extension.
+    #[serde(default)]
+    format: Option<DiskFormat>,
+    /// Inner filesystem type (disk rows only).
+    #[serde(default)]
+    fstype: Option<String>,
+    /// Read-only flag (disk rows only). Unset = source-derived default:
+    /// allowlisted block-device sources are read-only, image files follow
+    /// `mode`.
+    #[serde(default)]
+    readonly: Option<bool>,
     /// DEPRECATED alias for `mode` (`true` ≡ "ro", `false` ≡ "rw"); accepted
     /// at parse time with a deprecation warning, never serialized.
     #[serde(default)]
@@ -353,6 +465,33 @@ impl TryFrom<MountPlanWire> for MountPlan {
     type Error = String;
 
     fn try_from(wire: MountPlanWire) -> Result<Self, Self::Error> {
+        let kind = wire.kind.unwrap_or(MountKind::Bind);
+        // Issue #109 kind-consistency: the disk-only fields are hard parse
+        // errors on a bind row (and `quota_mib`, a bind-only field, on a disk
+        // row) — a silently ignored field would violate the fail-closed
+        // posture for device attachments.
+        if kind == MountKind::Bind
+            && (wire.format.is_some() || wire.fstype.is_some() || wire.readonly.is_some())
+        {
+            return Err(format!(
+                "mount '{}' is kind = \"bind\" but declares disk-only field(s) \
+                 (format/fstype/readonly); declare kind = \"disk\" for disk/device \
+                 attachments",
+                wire.host
+            ));
+        }
+        if kind == MountKind::Disk && wire.quota_mib.is_some() {
+            return Err(format!(
+                "mount '{}' is kind = \"disk\" but declares quota_mib; per-mount \
+                 write budgets are only defined for bind mounts",
+                wire.host
+            ));
+        }
+        // Remember whether `mode` was EXPLICITLY declared: the disk `readonly`
+        // conflict check must fire only against a declared mode (`mode`'s
+        // default value `"rw"` equals the image-source default, so a plain
+        // default must not be treated as an explicit declaration).
+        let mode_declared = wire.mode.is_some();
         let mode = match (wire.mode, wire.read_only) {
             (Some(mode), None) => mode,
             (None, Some(read_only)) => {
@@ -380,6 +519,29 @@ impl TryFrom<MountPlanWire> for MountPlan {
                 mode
             }
             (None, None) => MountMode::default(),
+        };
+        // Disk rows: an explicit `readonly` declaration folds into `mode` with
+        // the same conflict semantics as the deprecated `read_only` alias (so
+        // the canonical `mode` in plan JSON always reflects the declared
+        // access), and is RETAINED in `readonly` so the source-derived device
+        // read-only default can still be told apart from an explicit
+        // declaration. A bind row never reaches here (rejected above).
+        let (mode, readonly) = match (kind, wire.readonly) {
+            (MountKind::Disk, Some(readonly)) => {
+                let declared = if readonly {
+                    MountMode::Ro
+                } else {
+                    MountMode::Rw
+                };
+                if mode_declared && mode != declared {
+                    return Err(format!(
+                        "conflicting mount fields: readonly = {readonly} (≡ mode = \
+                         \"{declared}\") but mode = \"{mode}\"; make the two agree"
+                    ));
+                }
+                (declared, Some(readonly))
+            }
+            (_, wire_readonly) => (mode, wire_readonly),
         };
         // Mount-policy sugar normalization: `read`/`write` sub-tables on the
         // row concatenate INTO the mount's `policy` fragment (AFTER any
@@ -410,6 +572,11 @@ impl TryFrom<MountPlanWire> for MountPlan {
             owner: wire.owner,
             policy,
             policy_file: wire.policy_file,
+            kind,
+            quota_mib: wire.quota_mib,
+            format: wire.format,
+            fstype: wire.fstype,
+            readonly,
         })
     }
 }
@@ -432,7 +599,10 @@ impl Serialize for MountPlan {
         use serde::ser::SerializeStruct;
         // Canonical form only: `mode` is always emitted; `read_only` is NEVER
         // serialized. `owner`/`policy`/`policy_file` stay skip-when-None so plan JSON
-        // without them is byte-identical to the legacy form.
+        // without them is byte-identical to the legacy form. Issue #109
+        // fields are emitted only when they deviate from the defaults
+        // (`kind` bind, `quota_mib`/`format`/`fstype`/`readonly` unset), so
+        // pre-existing plan JSON stays byte-identical.
         let mut n = 3;
         if self.owner.is_some() {
             n += 1;
@@ -441,6 +611,21 @@ impl Serialize for MountPlan {
             n += 1;
         }
         if self.policy_file.is_some() {
+            n += 1;
+        }
+        if self.kind != MountKind::Bind {
+            n += 1;
+        }
+        if self.quota_mib.is_some() {
+            n += 1;
+        }
+        if self.format.is_some() {
+            n += 1;
+        }
+        if self.fstype.is_some() {
+            n += 1;
+        }
+        if self.readonly.is_some() {
             n += 1;
         }
         let mut s = serializer.serialize_struct("MountPlan", n)?;
@@ -455,6 +640,21 @@ impl Serialize for MountPlan {
         }
         if let Some(policy_file) = &self.policy_file {
             s.serialize_field("policy_file", policy_file)?;
+        }
+        if self.kind != MountKind::Bind {
+            s.serialize_field("kind", &self.kind)?;
+        }
+        if let Some(quota_mib) = self.quota_mib {
+            s.serialize_field("quota_mib", &quota_mib)?;
+        }
+        if let Some(format) = &self.format {
+            s.serialize_field("format", format)?;
+        }
+        if let Some(fstype) = &self.fstype {
+            s.serialize_field("fstype", fstype)?;
+        }
+        if let Some(readonly) = &self.readonly {
+            s.serialize_field("readonly", readonly)?;
         }
         s.end()
     }
@@ -476,7 +676,11 @@ impl schemars::JsonSchema for MountPlan {
                 "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical \
                  field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` \
                  is a deprecated parse-time alias (normalized into `mode`, never \
-                 serialized). `read`/`write` are parse-time mount-policy sugar in the \
+                 serialized). `kind` (default \"bind\") selects a virtiofs bind or a \
+                 virtio-blk disk/device attachment; `quota_mib` sets the bind \
+                 guest-write budget; `format`/`fstype`/`readonly` apply to \
+                 `kind = \"disk\"` rows (allowlisted device sources default \
+                 read-only). `read`/`write` are parse-time mount-policy sugar in the \
                  `[policy.mounts]` axis shapes, normalized into the row's `policy` \
                  fragment (never serialized)."
                     .to_string(),
@@ -876,7 +1080,31 @@ impl fmt::Display for SandboxPlan {
         }
         for m in &self.mounts {
             let ro = if m.is_read_only() { " (ro)" } else { "" };
-            writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?;
+            // Issue #109: the plan shows the attachment kind and the bind
+            // write budget. Legacy bind rows (no quota) keep the historical
+            // line byte-identical — the golden plan files pin this.
+            match m.kind {
+                MountKind::Bind => match m.quota_mib {
+                    Some(quota_mib) => writeln!(
+                        f,
+                        "mount: {}:{}{} (quota_mib={})",
+                        m.host, m.guest, ro, quota_mib
+                    )?,
+                    None => writeln!(f, "mount: {}:{}{}", m.host, m.guest, ro)?,
+                },
+                MountKind::Disk => {
+                    writeln!(f, "mount: kind=disk {}:{}{}", m.host, m.guest, ro)?;
+                    if let Some(format) = &m.format {
+                        writeln!(f, "  format: {}", format.as_str())?;
+                    }
+                    if let Some(fstype) = &m.fstype {
+                        writeln!(f, "  fstype: {}", fstype)?;
+                    }
+                    if let Some(readonly) = m.readonly {
+                        writeln!(f, "  readonly: {}", readonly)?;
+                    }
+                }
+            }
             if let Some(owner) = m.owner {
                 writeln!(f, "  owner: uid={} gid={}", owner.uid, owner.gid)?;
             }
@@ -1131,7 +1359,8 @@ impl EgressRule {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::unwrap_in_result
+    clippy::unwrap_in_result,
+    unsafe_code
 )]
 mod tests {
     use super::*;
@@ -1187,6 +1416,12 @@ mod tests {
                     policy: None,
                     owner: None,
                     policy_file: None,
+
+                    kind: MountKind::Bind,
+                    quota_mib: None,
+                    format: None,
+                    fstype: None,
+                    readonly: None,
                 },
                 MountPlan {
                     host: "/cfg".to_string(),
@@ -1195,6 +1430,12 @@ mod tests {
                     policy: None,
                     owner: None,
                     policy_file: None,
+
+                    kind: MountKind::Bind,
+                    quota_mib: None,
+                    format: None,
+                    fstype: None,
+                    readonly: None,
                 },
             ],
             network: NetworkPlan {
@@ -1237,6 +1478,205 @@ network: egress_default=deny ingress_default=deny
   egress: deny domain suffix .evil
 ";
         assert_eq!(format!("{plan}"), expected);
+    }
+
+    // ---- Issue #109: declared disk attachments + per-mount write budgets ----
+
+    fn parse_row(json: &str) -> MountPlan {
+        serde_json::from_str(json).unwrap_or_else(|e| panic!("row {json} must parse: {e}"))
+    }
+
+    #[test]
+    fn mount_row_legacy_bind_defaults_unchanged() {
+        // A pre-#109 row (host/guest/mode only) keeps every new field at its
+        // default — existing workloads stay valid byte-for-byte.
+        let row = parse_row(r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#);
+        assert_eq!(row.kind, MountKind::Bind);
+        assert_eq!(row.mode, MountMode::Ro);
+        assert_eq!(row.quota_mib, None);
+        assert_eq!(row.format, None);
+        assert_eq!(row.fstype, None);
+        assert_eq!(row.readonly, None);
+        assert!(row.is_read_only());
+    }
+
+    #[test]
+    fn mount_row_bind_quota_is_parsed() {
+        let row = parse_row(r#"{"host":"state","guest":"/data","quota_mib":512}"#);
+        assert_eq!(row.kind, MountKind::Bind);
+        assert_eq!(row.quota_mib, Some(512));
+        assert_eq!(row.readonly, None);
+    }
+
+    #[test]
+    fn mount_row_disk_accepted_with_read_only_default_for_device() {
+        // SAFETY: unique per-test device path; no other test asserts on it.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-plan-allow") };
+        let row = parse_row(r#"{"host":"/dev/wk-plan-allow","guest":"/mnt/dev","kind":"disk"}"#);
+        assert_eq!(row.kind, MountKind::Disk);
+        assert_eq!(
+            row.mode,
+            MountMode::Rw,
+            "mode stays default when undeclared"
+        );
+        assert_eq!(row.readonly, None, "no explicit readonly declaration");
+        assert!(
+            row.is_read_only(),
+            "allowlisted device source defaults to read-only"
+        );
+        // SAFETY: per-test var; removed before test end.
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+    }
+
+    #[test]
+    fn mount_row_disk_format_fstype_readonly_parsed_and_folded() {
+        let row = parse_row(
+            r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk","format":"qcow2","fstype":"ext4","readonly":false}"#,
+        );
+        assert_eq!(row.format, Some(DiskFormat::Qcow2));
+        assert_eq!(row.fstype.as_deref(), Some("ext4"));
+        assert_eq!(row.readonly, Some(false));
+        assert_eq!(row.mode, MountMode::Rw, "readonly=false folds to mode rw");
+        assert!(!row.is_read_only());
+        // readonly=true folds to mode ro.
+        let row = parse_row(
+            r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk","readonly":true}"#,
+        );
+        assert_eq!(row.mode, MountMode::Ro);
+        assert!(row.is_read_only());
+    }
+
+    #[test]
+    fn mount_row_kind_conflicts_fail_closed() {
+        // Disk-only fields on a bind row are hard errors.
+        let result =
+            serde_json::from_str::<MountPlan>(r#"{"host":"x","guest":"/y","format":"raw"}"#);
+        assert!(
+            result.is_err(),
+            "bind row with disk-only format must fail closed"
+        );
+        // quota_mib on a disk row is a hard error.
+        let result = serde_json::from_str::<MountPlan>(
+            r#"{"host":"/dev/sda3","guest":"/mnt","kind":"disk","quota_mib":100}"#,
+        );
+        assert!(
+            result.is_err(),
+            "disk row with bind-only quota must fail closed"
+        );
+        // Conflicting readonly vs mode on a disk row is a hard error.
+        let result = serde_json::from_str::<MountPlan>(
+            r#"{"host":"/dev/sda3","guest":"/mnt","kind":"disk","readonly":true,"mode":"rw"}"#,
+        );
+        assert!(result.is_err(), "readonly=true + mode=rw must fail closed");
+    }
+
+    #[test]
+    fn mount_row_serialize_keeps_legacy_bind_byte_identical() {
+        let row = parse_row(r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#);
+        assert_eq!(
+            serde_json::to_string(&row).unwrap(),
+            r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#,
+            "legacy bind plan JSON must stay byte-identical"
+        );
+    }
+
+    #[test]
+    fn mount_row_serialize_disk_emits_kind_and_options() {
+        let row = parse_row(
+            r#"{"host":"/dev/wk-serial","guest":"/mnt/dev","kind":"disk","readonly":true}"#,
+        );
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains(r#""kind":"disk""#), "json: {json}");
+        assert!(json.contains(r#""readonly":true"#), "json: {json}");
+        // An explicit quota on a bind row is serialized too.
+        let row = parse_row(r#"{"host":"state","guest":"/data","quota_mib":512}"#);
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains(r#""quota_mib":512"#), "json: {json}");
+    }
+
+    #[test]
+    fn sandbox_plan_display_shows_kind_and_quota() {
+        use crate::microsandbox::plan::NetworkPlan;
+        let mut plan = SandboxPlan {
+            name: "demo".into(),
+            image: None,
+            workdir: None,
+            command: vec![],
+            cpus: None,
+            memory_mib: None,
+            root_disk_mib: None,
+            env: vec![],
+            secret_env: vec![],
+            credentials: None,
+            ports: vec![],
+            network: NetworkPlan {
+                egress_default_deny: false,
+                ingress_default_deny: false,
+                egress_rules: vec![],
+                deny_rules: vec![],
+                ingress_rules: vec![],
+                egress_defaults_seal: None,
+                ingress_defaults_seal: None,
+            },
+            instance_policy: None,
+            virtualization: None,
+            init: None,
+            mounts: vec![],
+        };
+        // SAFETY: unique per-test device path; no other test asserts on it.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-display-allow") };
+        let mut bind = MountPlan {
+            host: "state".into(),
+            guest: "/data".into(),
+            mode: MountMode::Rw,
+            policy: None,
+            owner: None,
+            policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
+        };
+        bind.quota_mib = Some(512);
+        let mut disk = MountPlan {
+            host: "/dev/wk-display-allow".into(),
+            guest: "/mnt/dev".into(),
+            mode: MountMode::Rw,
+            policy: None,
+            owner: None,
+            policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
+        };
+        disk.kind = MountKind::Disk;
+        disk.format = Some(DiskFormat::Raw);
+        disk.fstype = Some("ext4".into());
+        plan.mounts = vec![bind, disk];
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("mount: state:/data (quota_mib=512)"),
+            "bind quota must render: {rendered}"
+        );
+        assert!(
+            rendered.contains("mount: kind=disk /dev/wk-display-allow:/mnt/dev (ro)"),
+            "disk row must render kind and the device read-only default: {rendered}"
+        );
+        assert!(
+            rendered.contains("  format: raw"),
+            "format must render: {rendered}"
+        );
+        assert!(
+            rendered.contains("  fstype: ext4"),
+            "fstype must render: {rendered}"
+        );
+        // SAFETY: per-test var; removed before test end.
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
     }
 
     /// ADR 0026/C2: a non-default bind renders `port: <bind_ip>:<host>:<guest>`;

@@ -268,6 +268,46 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
     }
     s.push(REC);
 
+    // Issue #109 attachment fields hashed only when declared — a quota/kind/
+    // format/fstype/readonly change MUST skew the config hash (a previously
+    // running instance with identical guest/host/mode would otherwise be
+    // reused unchanged). Legacy plans (all-bind, all-unset) never reach the
+    // group, preserving their hashes.
+    if plan.mounts.iter().any(|m| {
+        m.kind != crate::microsandbox::plan::MountKind::Bind
+            || m.quota_mib.is_some()
+            || m.format.is_some()
+            || m.fstype.is_some()
+            || m.readonly.is_some()
+    }) {
+        s.push_str("mount_attachment");
+        for m in &plan.mounts {
+            s.push(UNIT);
+            s.push_str(m.kind.to_string().as_str());
+            s.push(UNIT);
+            match m.quota_mib {
+                Some(q) => s.push_str(&format!("q={q}")),
+                None => s.push_str("q=0:"),
+            }
+            s.push(UNIT);
+            match &m.format {
+                Some(f) => s.push_str(&format!("f={}", f.as_str())),
+                None => s.push_str("f=0:"),
+            }
+            s.push(UNIT);
+            match &m.fstype {
+                Some(fs) => s.push_str(&format!("fs={fs}")),
+                None => s.push_str("fs=0:"),
+            }
+            s.push(UNIT);
+            match m.readonly {
+                Some(ro) => s.push_str(if ro { "ro=1" } else { "ro=0" }),
+                None => s.push_str("ro=0:"),
+            }
+        }
+        s.push(REC);
+    }
+
     // Guest owners are appended only when declared, preserving old hashes.
     if plan.mounts.iter().any(|m| m.owner.is_some()) {
         s.push_str("mount_owners");
@@ -504,7 +544,7 @@ mod tests {
     use crate::config::SecretViolationPolicy;
     use crate::microsandbox::plan::{
         CredentialBinding, CredentialsPlan, DenyDomainRule, EgressRule, EnvVar, HostBoundSecret,
-        IngressRule, MountMode, MountPlan, PortMapping, Protocol, Scope, SshGrantPlan,
+        IngressRule, MountKind, MountMode, MountPlan, PortMapping, Protocol, Scope, SshGrantPlan,
     };
     use crate::mount_policy::PolicyValue;
 
@@ -590,6 +630,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }
     }
 
@@ -766,6 +812,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: Some(std::path::PathBuf::from("inst/slug.json")),
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }];
         let mut untokened = empty_plan();
         untokened.mounts = vec![mount("/data", "/mnt", MountMode::Rw)];
@@ -939,6 +991,36 @@ mod tests {
             config_hash_of_plan(&ro),
             config_hash_of_plan(&m_base),
             "mount mode is runtime-relevant"
+        );
+
+        // Issue #109: attachment edits (kind/quota/format/fstype/readonly)
+        // → DIFFERENT, while a legacy all-bind all-unset plan keeps the
+        // pre-#109 hash (the group is appended only when declared).
+        let legacy = empty_plan();
+        let legacy_hash = config_hash_of_plan(&legacy);
+        let mut quota = empty_plan();
+        let mut quota_row = mount("/data", "/mnt", MountMode::Rw);
+        quota_row.quota_mib = Some(2048);
+        quota.mounts = vec![quota_row];
+        assert_ne!(config_hash_of_plan(&quota), legacy_hash, "bind quota edit");
+        let mut disk_plan = empty_plan();
+        let mut disk_row = mount("/dev/sda3", "/mnt/dev", MountMode::Rw);
+        disk_row.kind = crate::microsandbox::plan::MountKind::Disk;
+        disk_plan.mounts = vec![disk_row];
+        assert_ne!(
+            config_hash_of_plan(&disk_plan),
+            legacy_hash,
+            "attach kind edit"
+        );
+        let mut fmt_plan = disk_plan.clone();
+        let mut fmt_row = mount("/dev/sda3", "/mnt/dev", MountMode::Rw);
+        fmt_row.kind = crate::microsandbox::plan::MountKind::Disk;
+        fmt_row.format = Some(crate::microsandbox::plan::DiskFormat::Qcow2);
+        fmt_plan.mounts = vec![fmt_row];
+        assert_ne!(
+            config_hash_of_plan(&fmt_plan),
+            config_hash_of_plan(&disk_plan),
+            "disk format edit"
         );
 
         // Mount-policy fragment edit → DIFFERENT.
