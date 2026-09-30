@@ -271,7 +271,7 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
     // Issue #109 attachment fields hashed only when declared — a quota/kind/
     // format/fstype/readonly change MUST skew the config hash (a previously
     // running instance with identical guest/host/mode would otherwise be
-    // reused unchanged). Parsed disk rows always carry the folded effective
+    // reused unchanged). Resolved disk rows always carry the folded effective
     // `readonly` (see plan.rs), so the group always fires for disk rows and
     // explicitly records the enforced access. Legacy plans (all-bind,
     // all-unset) never reach the group, preserving their hashes.
@@ -561,6 +561,7 @@ fn egress_rule_canonical(rule: &crate::microsandbox::plan::EgressRule) -> String
 mod tests {
     use super::*;
     use crate::config::SecretViolationPolicy;
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
     use crate::microsandbox::plan::{
         CredentialBinding, CredentialsPlan, DenyDomainRule, EgressRule, EnvVar, HostBoundSecret,
         IngressRule, MountKind, MountMode, MountPlan, PortMapping, Protocol, Scope, SshGrantPlan,
@@ -911,7 +912,12 @@ mod tests {
 
     /// Runtime-relevant edits DO churn the hash.
     #[test]
+    #[allow(unsafe_code)] // Environment mutations are serialized and restored by the test guard.
     fn runtime_relevant_edits_churn_the_hash() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         let base_hash = config_hash_of_plan(&empty_plan());
 
         let mut edited = empty_plan();
@@ -1067,9 +1073,13 @@ mod tests {
         // disagree on the allowlist must not agree on the plan identity.
         let plan_for = |json: &str| -> anyhow::Result<SandboxPlan> {
             let mut plan = empty_plan();
-            plan.mounts = vec![serde_json::from_str(json)?];
+            let mut mount: MountPlan = serde_json::from_str(json)?;
+            mount.resolve_disk_access();
+            plan.mounts = vec![mount];
             Ok(plan)
         };
+        // SAFETY: ENV_TEST_LOCK is held until EnvGuard restores the original allowlist.
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         let device_json = r#"{"host":"/dev/wk-hash-allow","guest":"/mnt/dev","kind":"disk"}"#;
         let base_plan = plan_for(device_json)?;
         let base_hash = config_hash_of_plan(&base_plan);
@@ -1077,9 +1087,10 @@ mod tests {
             !canonical_plan_bytes(&base_plan).contains("ro=1"),
             "unlisted device must not hash as read-only"
         );
-        // SAFETY: unique per-test device path; removed before test end.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-hash-allow") };
         let allowed = plan_for(device_json)?;
+        // SAFETY: the same environment lock remains held.
         unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         assert_ne!(
             config_hash_of_plan(&allowed),

@@ -357,14 +357,14 @@ pub struct MountPlan {
     /// Explicit read-only flag for `kind = "disk"` rows. At the wire level,
     /// unset = the source-derived default: operator-allowlisted DEVICE
     /// sources are read-only (fail-closed posture), image files follow
-    /// `mode`. Parsing folds that effective default INTO `readonly`, so a
-    /// canonical row (and its serialized plan JSON and provenance hash)
-    /// always carries the access the runtime will enforce.
+    /// `mode`. Planning resolves host templates before folding the effective
+    /// default into `readonly`, so plan JSON and provenance carry the access
+    /// the runtime will enforce. Configuration rows preserve omission.
     pub readonly: Option<bool>,
     /// Attach-only flag for `kind = "disk"` rows: the device is attached as a
-    /// virtio-blk device but left OUT of the agentd bootstrap mount list, so
-    /// the guest kernel never mounts it (required for a `crypto_LUKS`
-    /// container, which the kernel cannot mount and agentd cannot open).
+    /// virtio-blk device but left out of agentd's bootstrap mount list.
+    /// The guest can inspect or unlock the device explicitly; other guest
+    /// services can still mount it.
     /// Unset = `false` = the disk is mounted at `guest` as before. Parsing
     /// canonicalizes a non-deviating `Some(false)` to `None` so the canonical
     /// row, its plan JSON and its provenance hash carry the flag only when it
@@ -373,6 +373,21 @@ pub struct MountPlan {
 }
 
 impl MountPlan {
+    /// Freeze effective disk access after resolving the host template.
+    /// Configuration serialization must preserve an omitted `readonly` until
+    /// this boundary: a template can resolve to an allowlisted device.
+    pub(crate) fn resolve_disk_access(&mut self) {
+        if self.kind == MountKind::Disk {
+            let readonly = self.is_read_only();
+            self.readonly = Some(readonly);
+            self.mode = if readonly {
+                MountMode::Ro
+            } else {
+                MountMode::Rw
+            };
+        }
+    }
+
     /// Canonical internal accessor: `true` iff the mount is read-only.
     /// Replaces the removed `read_only: bool` field at all internal call
     /// sites.
@@ -381,10 +396,9 @@ impl MountPlan {
     ///
     /// Disk rows: an explicit `readonly` declaration wins; an
     /// operator-allowlisted raw block device defaults to read-only even when
-    /// `mode` was left at its default; image files follow `mode`. Parsed rows
-    /// always carry that effective value in `readonly` (folded at parse
-    /// time), so plan display, serialized JSON, provenance hash and the SDK
-    /// wiring all read the same access.
+    /// `mode` was left at its default; image files follow `mode`. Planning
+    /// freezes that value after resolving host templates, so plan display,
+    /// serialized JSON, provenance and SDK wiring read the same access.
     pub fn is_read_only(&self) -> bool {
         match self.kind {
             MountKind::Bind => self.mode == MountMode::Ro,
@@ -399,8 +413,8 @@ impl MountPlan {
     /// [`MountPlan::is_read_only`]: plan display, serialized JSON, the
     /// provenance hash and the SDK wiring all read the same effective value
     /// (`attach_only.unwrap_or(false)`), so a declared `false` is
-    /// indistinguishable from an undeclared flag by design. Always `false` for
-    /// `kind = "bind"` rows (the field is rejected at parse time).
+    /// indistinguishable from an undeclared flag by design. Bind configuration
+    /// rows cannot declare this field; parsing rejects either explicit boolean.
     pub fn is_attach_only(&self) -> bool {
         self.attach_only.unwrap_or(false)
     }
@@ -414,17 +428,6 @@ impl MountPlan {
 /// matches exactly what the parser accepts. `deny_unknown_fields` keeps the
 /// removed sugar words (`mask`/`unmask`/`protect`/`writes_deny`) hard parse
 /// errors rather than silently ignored keys.
-///
-/// PIN DEPENDENCY — this field, and the `MountBuilder::attach_only()` call it
-/// feeds in `mounts.rs`, exist only on the microsandbox branch
-/// feat/attach-only-disk. Workestrate vendors that fork at
-/// control/agentctl/vendor/microsandbox-fork (patched by .cargo/config.toml
-/// path patches, prepared by `just sdk-prepare`), so THIS BRANCH DOES NOT
-/// COMPILE until that branch merges and the vendored pin moves: the vendored
-/// `MountBuilder` has no `.attach_only()` yet. Nothing else here is blocked —
-/// the wire shape, the parse-time validation, the plan display and the
-/// provenance row are plain agentctl code. Until the pin moves, no config may
-/// declare `attach_only` and every disk row is mounted during agentd boot.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -448,13 +451,12 @@ struct MountPlanWire {
     fstype: Option<String>,
     /// Read-only flag (disk rows only). Unset = source-derived default:
     /// allowlisted block-device sources are read-only, image files follow
-    /// `mode`. Parsing folds the effective value into the canonical row.
+    /// `mode`. Planning folds the effective value after resolving the host.
     #[serde(default)]
     readonly: Option<bool>,
-    /// Attach-only flag (disk rows only). Set = the device is attached as a
-    /// virtio-blk device but left out of the agentd bootstrap mount list, so
-    /// the guest kernel never mounts it (a `crypto_LUKS` container would
-    /// otherwise abort the boot). Unset (the default) = the disk is mounted at
+    /// Attach-only flag (disk rows only). True attaches the virtio-blk device
+    /// without an automatic agentd mount, allowing explicit guest inspection
+    /// or unlocking. Unset (the default) = the disk is mounted at
     /// `guest` as before; an explicit `false` is canonicalized to unset, so a
     /// plan without a deviating flag keeps its bytes and provenance hash.
     #[serde(default)]
@@ -535,11 +537,23 @@ impl TryFrom<MountPlanWire> for MountPlan {
                 wire.host
             ));
         }
-        // Remember whether `mode` was EXPLICITLY declared: the disk `readonly`
-        // conflict check must fire only against a declared mode (`mode`'s
-        // default value `"rw"` equals the image-source default, so a plain
-        // default must not be treated as an explicit declaration).
-        let mode_declared = wire.mode.is_some();
+        if kind == MountKind::Disk
+            && (wire.owner.is_some()
+                || wire.policy.is_some()
+                || wire.policy_file.is_some()
+                || wire.read.is_some()
+                || wire.write.is_some())
+        {
+            return Err(format!(
+                "mount '{}' is kind = \"disk\" but declares bind-only field(s) \
+                 (owner/policy/policy_file/read/write); virtio-blk attachments \
+                 cannot enforce per-file ownership or mount policies",
+                wire.host
+            ));
+        }
+        // Either spelling is an explicit access declaration. The default rw
+        // mode alone must not conflict with an explicit readonly=true.
+        let mode_declared = wire.mode.is_some() || wire.read_only.is_some();
         let mode = match (wire.mode, wire.read_only) {
             (Some(mode), None) => mode,
             (None, Some(read_only)) => {
@@ -591,20 +605,9 @@ impl TryFrom<MountPlanWire> for MountPlan {
             }
             (_, wire_readonly) => (mode, wire_readonly),
         };
-        // Fold the EFFECTIVE disk read-only default into the canonical row so
-        // the serialized plan JSON and its provenance hash agree with runtime
-        // semantics: an out-of-process consumer (or a differently-configured
-        // environment) must see the same access the plan will enforce. An
-        // undeclared `readonly` on a disk row means "source-derived":
-        // operator-allowlisted block devices default to read-only
-        // (fail-closed, see [`super::mounts::is_allowlisted_device`]); image
-        // files follow `mode`. Bind rows never reach here (rejected above).
-        let readonly = match (kind, readonly) {
-            (MountKind::Disk, None) => Some(
-                mode == MountMode::Ro || super::mounts::is_allowlisted_device(&wire.host),
-            ),
-            (_, readonly) => readonly,
-        };
+        // Preserve omission through configuration merges and serialization.
+        // ConfigWorkload::plan resolves host templates before freezing the
+        // source-derived disk access with resolve_disk_access().
         // `attach_only` has no conflict partner and no source-derived default:
         // its effective value is `attach_only.unwrap_or(false)`, which is what
         // [`MountPlan::is_attach_only`] reads. Only a declared `true` deviates,
@@ -677,7 +680,7 @@ impl Serialize for MountPlan {
         // without them is byte-identical to the legacy form. Issue #109
         // fields are emitted only when they deviate from the defaults (`kind`
         // bind, `quota_mib`/`format`/`fstype` unset) — except `readonly`, which
-        // parsing folds to the EFFECTIVE disk access, so every disk plan JSON
+        // planning folds to the EFFECTIVE disk access, so every disk plan JSON
         // states the read-only state the runtime will enforce. `attach_only`
         // is emitted only when it deviates (`is_attach_only()`), so a disk row
         // that mounts normally keeps the bytes of a plan that never mentions
@@ -766,7 +769,7 @@ impl schemars::JsonSchema for MountPlan {
                  guest-write budget; `format`/`fstype`/`readonly`/`attach_only` \
                  apply to `kind = \"disk\"` rows (allowlisted device sources \
                  default read-only; `attach_only` attaches the device without \
-                 mounting it in the guest). `read`/`write` are parse-time \
+                 an automatic agentd mount). `read`/`write` are parse-time \
                  mount-policy sugar in the \
                  `[policy.mounts]` axis shapes, normalized into the row's `policy` \
                  fragment (never serialized)."
@@ -1457,6 +1460,7 @@ impl EgressRule {
 )]
 mod tests {
     use super::*;
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
 
     fn definition(env_var: &str) -> SecretDefinition {
         SecretDefinition {
@@ -1605,14 +1609,20 @@ network: egress_default=deny ingress_default=deny
 
     #[test]
     fn mount_row_disk_accepted_with_read_only_default_for_device() -> anyhow::Result<()> {
-        // SAFETY: unique per-test device path; no other test asserts on it.
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-plan-allow") };
-        let row = parse_row(r#"{"host":"/dev/wk-plan-allow","guest":"/mnt/dev","kind":"disk"}"#);
+        let mut row =
+            parse_row(r#"{"host":"/dev/wk-plan-allow","guest":"/mnt/dev","kind":"disk"}"#);
+        row.resolve_disk_access();
         assert_eq!(row.kind, MountKind::Disk);
         assert_eq!(
             row.mode,
-            MountMode::Rw,
-            "mode stays default when undeclared"
+            MountMode::Ro,
+            "resolved mode matches the effective access"
         );
         assert_eq!(
             row.readonly,
@@ -1627,8 +1637,8 @@ network: egress_default=deny ingress_default=deny
         // enforced access so an out-of-process consumer sees it too.
         let json = serde_json::to_string(&row)?;
         assert!(json.contains(r#""readonly":true"#), "json: {json}");
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        let decoded: MountPlan = serde_json::from_str(&json)?;
+        assert_eq!(decoded, row, "resolved device access must round-trip");
         Ok(())
     }
 
@@ -1637,7 +1647,9 @@ network: egress_default=deny ingress_default=deny
         // A non-allowlisted IMAGE source with no declared access: the fold is
         // false (image files follow the default mode rw) and is serialized so
         // the artifact matches the runtime.
-        let row = parse_row(r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk"}"#);
+        let mut row =
+            parse_row(r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk"}"#);
+        row.resolve_disk_access();
         assert_eq!(row.readonly, Some(false), "image source: mode default rw");
         assert!(!row.is_read_only());
         let json = serde_json::to_string(&row)?;
@@ -1647,19 +1659,26 @@ network: egress_default=deny ingress_default=deny
 
     #[test]
     fn mount_row_disk_allowlisted_device_readonly_beats_declared_mode() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         // An EXPLICIT mode:"rw" cannot override the device fail-closed
         // default; the canonical row folds readonly=true and serializes it.
-        // SAFETY: unique per-test device path; no other test asserts on it.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-plan-fold-allow") };
-        let row = parse_row(
+        let mut row = parse_row(
             r#"{"host":"/dev/wk-plan-fold-allow","guest":"/mnt/dev","kind":"disk","mode":"rw"}"#,
         );
-        assert_eq!(row.readonly, Some(true), "allowlisted device stays read-only");
+        row.resolve_disk_access();
+        assert_eq!(
+            row.readonly,
+            Some(true),
+            "allowlisted device stays read-only"
+        );
         assert!(row.is_read_only());
         let json = serde_json::to_string(&row)?;
         assert!(json.contains(r#""readonly":true"#), "json: {json}");
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         Ok(())
     }
 
@@ -1667,8 +1686,14 @@ network: egress_default=deny ingress_default=deny
     fn mount_row_disk_folded_readonly_round_trips_stably() -> anyhow::Result<()> {
         // The folded artifact re-parses to the identical canonical row, so
         // serialized and in-memory access semantics can never drift.
-        let row = parse_row(r#"{"host":"/dev/wk-plan-roundtrip","guest":"/mnt","kind":"disk"}"#);
-        assert_eq!(row.readonly, Some(false), "not allowlisted in this test env");
+        let mut row =
+            parse_row(r#"{"host":"/dev/wk-plan-roundtrip","guest":"/mnt","kind":"disk"}"#);
+        row.resolve_disk_access();
+        assert_eq!(
+            row.readonly,
+            Some(false),
+            "not allowlisted in this test env"
+        );
         let json = serde_json::to_string(&row)?;
         let again: MountPlan = serde_json::from_str(&json)?;
         assert_eq!(again, row);
@@ -1752,12 +1777,18 @@ network: egress_default=deny ingress_default=deny
     fn mount_row_disk_attach_only_parsed_and_serialized() -> anyhow::Result<()> {
         // A declared flag is retained in the canonical row, reaches
         // `is_attach_only()` and is serialized with the rest of the row.
-        let row = parse_row(
+        let mut row = parse_row(
             r#"{"host":"srv/luks.img","guest":"/mnt/q","kind":"disk","format":"raw","attach_only":true}"#,
         );
         assert_eq!(row.attach_only, Some(true));
         assert!(row.is_attach_only());
-        assert_eq!(row.readonly, Some(false), "unrelated access fields are untouched");
+        assert_eq!(row.readonly, None, "configuration preserves omitted access");
+        row.resolve_disk_access();
+        assert_eq!(
+            row.readonly,
+            Some(false),
+            "image access resolves independently"
+        );
         let json = serde_json::to_string(&row)?;
         assert!(json.contains(r#""attach_only":true"#), "json: {json}");
         let again: MountPlan = serde_json::from_str(&json)?;
@@ -1766,21 +1797,59 @@ network: egress_default=deny ingress_default=deny
     }
 
     #[test]
-    fn mount_row_attach_only_on_a_bind_fails_closed() {
-        // Only `kind = "disk"` may declare the flag: on a bind row the bind
-        // path would silently drop it, so it is a hard parse error that names
-        // the field.
-        let result = serde_json::from_str::<MountPlan>(
-            r#"{"host":"data","guest":"/data","attach_only":true}"#,
-        );
-        let err = match result {
-            Ok(row) => panic!("attach_only on a bind row must fail closed, got {row:?}"),
-            Err(err) => err.to_string(),
-        };
-        assert!(
-            err.contains("attach_only"),
-            "the error must name the field: {err}"
-        );
+    fn mount_row_attach_only_on_a_bind_fails_closed() -> anyhow::Result<()> {
+        for flag in [false, true] {
+            let source = format!(r#"{{"host":"data","guest":"/data","attach_only":{flag}}}"#);
+            let result = serde_json::from_str::<MountPlan>(&source);
+            assert!(
+                matches!(&result, Err(error) if error.to_string().contains("attach_only")),
+                "bind accepted attach_only={flag}: {result:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn disk_readonly_conflicts_with_deprecated_alias() -> anyhow::Result<()> {
+        for (alias, readonly) in [(true, false), (false, true)] {
+            let source = format!(
+                r#"{{"host":"image.raw","guest":"/disk","kind":"disk","read_only":{alias},"readonly":{readonly}}}"#
+            );
+            let result = serde_json::from_str::<MountPlan>(&source);
+            assert!(
+                matches!(&result, Err(error) if error.to_string().contains("conflicting mount fields"))
+            );
+        }
+        for readonly in [false, true] {
+            let source = format!(
+                r#"{{"host":"image.raw","guest":"/disk","kind":"disk","read_only":{readonly},"readonly":{readonly}}}"#
+            );
+            let mount: MountPlan = serde_json::from_str(&source)?;
+            assert_eq!(mount.is_read_only(), readonly);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mount_rejects_bind_ownership_and_policy_fields() -> anyhow::Result<()> {
+        for field in [
+            r#""owner":{"uid":123,"gid":123}"#,
+            r#""policy":{"write":{"deny":["**"]}}"#,
+            r#""policy_file":"instance/disk.json""#,
+            r#""read":{"deny":["**"]}"#,
+            r#""write":{"deny":["**"]}"#,
+        ] {
+            let source = format!(r#"{{"host":"image.raw","guest":"/disk","kind":"disk",{field}}}"#);
+            let result = serde_json::from_str::<MountPlan>(&source);
+            assert!(
+                matches!(&result, Err(error) if error.to_string().contains("bind-only field")),
+                "unexpected disk-field result for {field}: {result:?}"
+            );
+            let bind_source = source.replace(r#""kind":"disk""#, r#""kind":"bind""#);
+            let bind: MountPlan = serde_json::from_str(&bind_source)?;
+            assert_eq!(bind.kind, MountKind::Bind);
+        }
+        Ok(())
     }
 
     #[test]
@@ -1810,7 +1879,11 @@ network: egress_default=deny ingress_default=deny
     }
 
     #[test]
-    fn sandbox_plan_display_shows_kind_and_quota() {
+    fn sandbox_plan_display_shows_kind_and_quota() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         use crate::microsandbox::plan::NetworkPlan;
         let mut plan = SandboxPlan {
             name: "demo".into(),
@@ -1838,7 +1911,7 @@ network: egress_default=deny ingress_default=deny
             init: None,
             mounts: vec![],
         };
-        // SAFETY: unique per-test device path; no other test asserts on it.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-display-allow") };
         let mut bind = MountPlan {
             host: "state".into(),
@@ -1906,8 +1979,7 @@ network: egress_default=deny ingress_default=deny
             rendered.contains("  attach_only: true"),
             "attach_only must render on the disk row: {rendered}"
         );
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        Ok(())
     }
 
     /// ADR 0026/C2: a non-default bind renders `port: <bind_ip>:<host>:<guest>`;

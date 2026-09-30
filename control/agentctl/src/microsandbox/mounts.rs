@@ -18,9 +18,9 @@ pub(crate) fn allowed_devices() -> Vec<PathBuf> {
 }
 
 /// `true` iff `host` is an absolute path present verbatim on the operator
-/// device allowlist ([`allowed_devices`]). Pure string match on the RAW
-/// config host (no filesystem access), so plan display, config validation,
-/// plan preflight and the runtime build all agree on device-ness.
+/// device allowlist ([`allowed_devices`]). This does not access the filesystem.
+/// Planning resolves host templates before using this match to freeze disk
+/// access; preflight and runtime separately check the source's actual type.
 pub(crate) fn is_allowlisted_device(host: &str) -> bool {
     let path = Path::new(host);
     if !path.is_absolute() {
@@ -273,17 +273,15 @@ fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
         Some(fstype) => v.fstype(fstype.clone()),
         None => v,
     };
-    // An attach-only row leaves the device to the guest: agentd's bootstrap
-    // mount list omits the disk, so an unmountable container (crypto_LUKS)
-    // cannot abort the boot. The guest finds the device at
-    // /dev/disk/by-id/virtio-<id> or as the next free /dev/vdX.
-    //
-    // PIN DEPENDENCY: `MountBuilder::attach_only()` exists only on the
-    // microsandbox branch feat/attach-only-disk. It arrives with the pin move
-    // (`just sdk-prepare` re-vendors control/agentctl/vendor/microsandbox-fork
-    // from the merged fork), and until then this call does not compile.
-    // Nothing else on the mount path needs the fork.
-    let v = if m.is_attach_only() { v.attach_only() } else { v };
+    // Leave attach-only disks out of agentd's bootstrap mount list. The guest
+    // can inspect or unlock the device explicitly without an automatic mount.
+    // Device naming depends on guest support; identify the attached virtio
+    // disk by its metadata instead of assuming a fixed /dev/vdX.
+    let v = if m.is_attach_only() {
+        v.attach_only()
+    } else {
+        v
+    };
     if m.is_read_only() { v.readonly() } else { v }
 }
 
@@ -704,6 +702,7 @@ mod tests {
     use super::{MountRoots, ensure_mount_sources, preflight_existence, resolve_mount_host};
     use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
     use crate::microsandbox::plan::{MountKind, MountMode, MountPlan, NetworkPlan, SandboxPlan};
 
     // ---- ADR 0030 V-addendum §V2: instance-scoped state paths ----
@@ -1044,47 +1043,40 @@ mod tests {
 
     #[test]
     fn disk_mount_attach_only_threads_through_to_sdk() -> anyhow::Result<()> {
-        // The canonical row's flag reaches the SDK builder's disk path; the
-        // undeclared default keeps the historical mount-after-boot behavior.
-        // Compiling this test needs the vendored fork pin that carries
-        // `MountBuilder::attach_only()` and the `attach_only` variant field
-        // (see the pin note on `configure_disk_mount`).
         use microsandbox::sandbox::{MountBuilder, VolumeMount};
-        let mut row = bind_row("/dev/wk-attach-only", "/mnt/q", MountMode::Rw);
-        row.kind = MountKind::Disk;
-        row.attach_only = Some(true);
-        let built = super::configure_disk_mount(
-            MountBuilder::new("/mnt/q"),
-            "/dev/wk-attach-only".into(),
-            &row,
-        )
-        .build()?;
-        let VolumeMount::DiskImage { attach_only, .. } = built else {
-            panic!("expected disk image mount");
-        };
-        assert!(attach_only, "declared attach_only must reach the SDK");
-
-        let mut plain = bind_row("/dev/wk-attach-only", "/mnt/q", MountMode::Rw);
-        plain.kind = MountKind::Disk;
-        let built = super::configure_disk_mount(
-            MountBuilder::new("/mnt/q"),
-            "/dev/wk-attach-only".into(),
-            &plain,
-        )
-        .build()?;
-        let VolumeMount::DiskImage { attach_only, .. } = built else {
-            panic!("expected disk image mount");
-        };
-        assert!(
-            !attach_only,
-            "unset attach_only must keep the boot-time mount"
-        );
+        for attach_only in [false, true] {
+            for readonly in [false, true] {
+                let mut row = bind_row("fixture.raw", "/mnt/q", MountMode::Rw);
+                row.kind = MountKind::Disk;
+                row.attach_only = Some(attach_only);
+                row.readonly = Some(readonly);
+                row.resolve_disk_access();
+                let built = super::configure_disk_mount(
+                    MountBuilder::new("/mnt/q"),
+                    "fixture.raw".into(),
+                    &row,
+                )
+                .build()?;
+                assert!(matches!(
+                    built,
+                    VolumeMount::DiskImage {
+                        attach_only: actual_attach_only,
+                        options,
+                        ..
+                    } if actual_attach_only == attach_only && options.readonly == readonly
+                ));
+            }
+        }
         Ok(())
     }
 
     #[test]
-    fn disk_row_read_only_defaults_to_true_for_allowlisted_device() {
-        // SAFETY: unique per-test device path; no other test asserts on it.
+    fn disk_row_read_only_defaults_to_true_for_allowlisted_device() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-test-allow-device") };
         let mut device = bind_row("/dev/wk-test-allow-device", "/mnt/dev", MountMode::Rw);
         device.kind = MountKind::Disk;
@@ -1099,8 +1091,7 @@ mod tests {
             !image.is_read_only(),
             "image file keeps the mode default (rw)"
         );
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        Ok(())
     }
 
     #[test]
@@ -1149,6 +1140,10 @@ mod tests {
 
     #[test]
     fn disk_source_unknown_device_fails_closed() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         let root = unique_root("disk-dev");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
@@ -1165,7 +1160,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&root);
             return Ok(());
         }
-        // SAFETY: unique per-test device path; removed before test end.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-other-device") };
         let host = device.to_string_lossy().into_owned();
         let mut row = bind_row(&host, "/mnt/dev", MountMode::Rw);
@@ -1176,14 +1171,16 @@ mod tests {
             matches!(&result, Err(e) if e.to_string().contains("NOT on the operator allowlist")),
             "an existing block device outside the allowlist must fail closed: got {result:?}"
         );
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 
     #[test]
     fn disk_source_allowlisted_block_device_is_accepted() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         let root = unique_root("disk-dev-ok");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
@@ -1203,14 +1200,12 @@ mod tests {
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row.clone()]);
         let roots = roots_for(&root, None, None);
-        // SAFETY: unique per-test device path; removed before test end.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe {
             std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", &host);
         }
         ensure_mount_sources(&roots, &plan)?;
         assert!(row.is_read_only(), "allowlisted device defaults read-only");
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
