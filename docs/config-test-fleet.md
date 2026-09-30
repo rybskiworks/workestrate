@@ -72,7 +72,7 @@ The `just` targets below register nothing in the operator's config: they write a
 local-path fleet entry into a throwaway config directory for the invocation, so
 a validation host needs no `fleet add` and leaves no registry entry behind.
 Both targets disable project configuration and ignore caller configuration-ref
-and runtime-state directory overrides.
+workload-ref, and runtime-state directory overrides.
 
 ## Run the gate
 
