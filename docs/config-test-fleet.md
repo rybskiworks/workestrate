@@ -71,8 +71,10 @@ change the fleet that `workload` commands read.
 The `just` targets below register nothing in the operator's config: they write a
 local-path fleet entry into a throwaway config directory for the invocation, so
 a validation host needs no `fleet add` and leaves no registry entry behind.
-Both targets disable project configuration and ignore caller configuration-ref
-workload-ref, and runtime-state directory overrides.
+The plan commands inherit only `HOME`, `PATH`, and `LC_ALL=C`. They disable
+project configuration and select the temporary config and fixture fleet
+explicitly, so caller configuration and reference overrides cannot select
+different input.
 
 ## Run the gate
 

@@ -303,8 +303,7 @@ _verify-config-test-inner:
     _fleet_path="$(cd "$_fleet_dir" && pwd)"
     printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_config_dir/config.toml"
     for name in "${_capsules[@]}"; do \
-        env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
-          -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR -u WORKESTRATE_WORKLOAD_REF \
+        env -i HOME="$HOME" PATH="$PATH" LC_ALL=C \
           "$_config_dir/workestrate/bin/workestrate" --config "$_config_dir" --no-project-config --fleet "$_fleet_name" workload plan "$name" \
           | diff - "$_fleet_dir/golden/$name.plan.txt" \
           || (echo "config test fleet plan mismatch for $name; refresh the capsule's golden plan with 'just config-test-golden-generate'" && exit 1); \
@@ -358,8 +357,7 @@ _config-test-golden-generate-inner:
     # cannot land a partial set of goldens.
     mkdir -p "$_tmp/golden"
     for name in "${_capsules[@]}"; do \
-        env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
-          -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR -u WORKESTRATE_WORKLOAD_REF \
+        env -i HOME="$HOME" PATH="$PATH" LC_ALL=C \
           "$_tmp/workestrate/bin/workestrate" --config "$_tmp" --no-project-config --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
           || (echo "FATAL: workload plan failed for $name; no golden plan was written" >&2 && exit 1); \
     done
