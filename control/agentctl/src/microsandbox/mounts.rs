@@ -1096,8 +1096,11 @@ mod tests {
         let root = unique_root("disk-dev");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
+        let device_str = device
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("device path is not UTF-8: {}", device.display()))?;
         let mknod_status = std::process::Command::new("mknod")
-            .args([device.to_str().unwrap(), "b", "7", "200"])
+            .args([device_str, "b", "7", "200"])
             .status();
         if !mknod_status.is_ok_and(|s| s.success()) {
             // Not root / no mknod: the branch cannot be exercised here; the
@@ -1128,8 +1131,11 @@ mod tests {
         let root = unique_root("disk-dev-ok");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
+        let device_str = device
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("device path is not UTF-8: {}", device.display()))?;
         let mknod_status = std::process::Command::new("mknod")
-            .args([device.to_str().unwrap(), "b", "7", "201"])
+            .args([device_str, "b", "7", "201"])
             .status();
         if !mknod_status.is_ok_and(|s| s.success()) {
             eprintln!("mknod unavailable; skipping allowlisted-device branch");
@@ -1264,14 +1270,18 @@ mod tests {
     // ---- A2 regression: validate_mount_host rejects hostile inputs ----
 
     #[test]
-    fn validate_mount_host_rejects_absolute_paths_for_bind_rows() {
+    fn validate_mount_host_rejects_absolute_paths_for_bind_rows() -> anyhow::Result<()> {
         // A bind row may never reference an absolute host path ...
-        let err = validate_mount_host("/etc/passwd", MountKind::Bind).unwrap_err();
-        assert!(err.to_string().contains("absolute path"), "got: {err}");
+        let result = validate_mount_host("/etc/passwd", MountKind::Bind);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("absolute path")),
+            "bind row with absolute host must fail closed: got {result:?}"
+        );
         // ... while an absolute DEVICE/IMAGE host is the point of a disk row
         // (device sources are still allowlist-checked at plan/runtime).
-        validate_mount_host("/dev/sda3", MountKind::Disk).unwrap();
-        validate_mount_host("/srv/images/evidence.raw", MountKind::Disk).unwrap();
+        validate_mount_host("/dev/sda3", MountKind::Disk)?;
+        validate_mount_host("/srv/images/evidence.raw", MountKind::Disk)?;
+        Ok(())
     }
 
     #[test]
