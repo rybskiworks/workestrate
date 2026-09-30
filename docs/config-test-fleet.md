@@ -11,9 +11,8 @@ the capsules or run their assertions. Runtime acceptance requires the separate
 launch, assertion, and teardown procedure in the fleet's `README.agents.md`.
 
 The checkout lives at `tests/fleets/workestrate-config-test` as a submodule of
-this repository, pinned DETACHED at the commit the superproject records (the
-gitlink records one commit, `e26fade`; `git submodule status` prints the live
-pin). The capsule table, the assertions each capsule makes, and the fleet's own
+this repository, pinned DETACHED at the commit the superproject gitlink records
+(`git submodule status` prints the live pin). The capsule table, the assertions each capsule makes, and the fleet's own
 safety rules live in that repository's `README.md` and `README.agents.md`; do
 not duplicate them here.
 
@@ -98,41 +97,43 @@ submodule checkout: commit the result in the fleet repository, not in this one.
 Capture the goldens on the validation host, because plan output must match the
 host the gate runs on.
 
-## Capsules and parse status
+## Capsules and dependencies
 
-The first capsules target the mount features still pending on `main`:
+The fleet covers the baseline service and these mount features:
 
 - Disk attachments: `kind = "disk"` mount rows with `format`, `fstype`, and
   `readonly` fields.
 - Per-mount write budgets: `quota_mib` on the mount row.
 
-Those fields land with the declared disk attachments work (issue #109), so
-these capsules do not parse against `main` today: `workload plan` rejects
-fields that are not part of the wire type yet. Parse them against a checkout
-of that work.
+The consuming Workestrate version must support these declarations. The loader
+reads the complete fleet before selecting a capsule, so an older tool can
+reject disk fields even when only `box-smoke` is requested.
 
-Capsules that wait on the same work:
+The disk capsule requires its generated 64 MiB ext4 image before planning.
+Create it once in the pinned checkout; the script refuses to overwrite an
+existing image:
 
-- Attach-only disks and LUKS: `attach_only` is not yet a field of the mount
-  wire type.
-- Quarantine: waits on the same field.
-- SSD storage profile: needs host SSD backing for `$MSB_HOME/sandboxes`
-  before it can boot.
+```sh
+sh tests/fleets/workestrate-config-test/workestrate/workloads/disk-attach/fixtures/make-disk-image.sh
+```
+
+The generated image is ignored by Git and must not be committed. It is a regular
+fixture file; no physical device is needed for this gate.
+
+Additional capsules remain outside the current fleet:
+
+- Attach-only disks and LUKS: `attach_only` is not yet a mount wire field.
+- Quarantine: also requires attach-only support.
+- SSD storage profiles: require suitable host backing for the runtime state.
 
 ## Status
 
-The submodule is wired and pinned at the reviewed fleet commit. The host gate
-is still incomplete:
+The reviewed fixture pin includes golden plans for `box-smoke`, `disk-attach`
+and `write-budget`. `just verify-config-test` compares each capsule against its
+committed plan after checking prerequisites. These comparisons do not execute
+the in-guest assertions; the fleet runbook covers runtime acceptance separately.
 
-- Golden plans. `just verify-config-test` diffs each capsule's `workload plan`
-  against `golden/<capsule>.plan.txt` in the fleet checkout, and the fleet
-  repository carries no `golden/` directory yet. Until those files exist, the
-  target fails with `FATAL: missing golden plan for ...` and names the command
-  that captures them; a capsule that was never compared never reports success.
-  The capsules are enumerated from `workestrate/workloads/`, so all three
-  (`box-smoke`, `disk-attach`, `write-budget`) are covered.
-- CI wiring. Nothing in `.github/workflows/ci.yml` fetches the submodule or
-  certifies KVM, so the target stays host-only.
+CI does not fetch the submodule or certify KVM, so the target remains host-only.
 
 The submodule wiring here is provisional and tracked by issue #95 (optional
 configuration submodule with feature fleets). `docs/adr.md` records the
