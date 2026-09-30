@@ -287,6 +287,15 @@
       },
       "additionalProperties": false
     },
+    "DiskFormat": {
+      "description": "Disk image format for `kind = \"disk\"` mounts, mirroring the SDK's `DiskImageFormat` vocabulary. Optional on the wire: when absent the SDK infers the format from the host path's extension (`.qcow2`/`.vmdk`, else raw), exactly like `msb --mount-disk`.",
+      "type": "string",
+      "enum": [
+        "raw",
+        "qcow2",
+        "vmdk"
+      ]
+    },
     "DomainEntry": {
       "description": "One egress domain entry — `[[policy.egress.allow.domain]]` or `[[policy.egress.deny.domain]]`. `port` is REQUIRED on allow, OPTIONAL on deny (omitted = all ports, deny-only). Validated by the policy compiler.",
       "type": "object",
@@ -963,6 +972,25 @@
       },
       "additionalProperties": false
     },
+    "MountKind": {
+      "description": "Mount attachment kind (issue #109 — declared disk attachments). The mount row's default kind is `\"bind\"` (a virtiofs host-directory mount, the only kind that existed before), so every pre-existing workload row stays valid and byte-identical.",
+      "oneOf": [
+        {
+          "description": "Virtiofs host-directory/file mount (the legacy behavior).",
+          "type": "string",
+          "enum": [
+            "bind"
+          ]
+        },
+        {
+          "description": "Virtio-blk attachment: a disk image FILE (raw/qcow2/vmdk) or an operator-allowlisted host block device. Device sources default to read-only (see [`MountPlan::readonly`]).",
+          "type": "string",
+          "enum": [
+            "disk"
+          ]
+        }
+      ]
+    },
     "MountMode": {
       "description": "Mount access mode (spec §\"Mount `mode` field\"). Closed vocabulary: the only accepted wire values are `\"ro\"` (read-only) and `\"rw\"` (read-write, the default). This replaces the `read_only = <bool>` field, which remains a DEPRECATED parse-time alias (see [`MountPlan`]'s custom `Deserialize`). Rationale (ADR 0030 addendum): booleans don't grow — a future third state (e.g. masked / append-only) fits a mode enum, not a bool.",
       "type": "string",
@@ -997,18 +1025,50 @@
       "additionalProperties": false
     },
     "MountPlan": {
-      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `kind` (default \"bind\") selects a virtiofs bind or a virtio-blk disk/device attachment; `quota_mib` sets the bind guest-write budget; `format`/`fstype`/`readonly` apply to `kind = \"disk\"` rows (allowlisted device sources default read-only). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
       "type": "object",
       "required": [
         "guest",
         "host"
       ],
       "properties": {
+        "format": {
+          "description": "Disk image format (disk rows only); unset infers from the extension.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DiskFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fstype": {
+          "description": "Inner filesystem type (disk rows only).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "guest": {
           "type": "string"
         },
         "host": {
           "type": "string"
+        },
+        "kind": {
+          "description": "Attachment kind: \"bind\" (default) or \"disk\".",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MountKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mode": {
           "description": "Mount access mode: \"ro\" (read-only) or \"rw\" (read-write, the default).",
@@ -1047,6 +1107,16 @@
             "null"
           ]
         },
+        "quota_mib": {
+          "description": "Guest-write budget in MiB (bind rows only).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "read": {
           "description": "Mount-policy sugar: the read axis (visibility) directly on the mount row, in the same shape `[policy.mounts.read]` accepts (TOML dotted-key form: `read.deny = [...]` / `read.allow = [...]`). Parse-time-only: normalized INTO `policy.read` by `TryFrom<MountPlanWire>`, never serialized.",
           "default": null,
@@ -1063,6 +1133,14 @@
           "description": "DEPRECATED alias for `mode` (`true` ≡ \"ro\", `false` ≡ \"rw\"); accepted at parse time with a deprecation warning, never serialized.",
           "deprecated": true,
           "type": "boolean"
+        },
+        "readonly": {
+          "description": "Read-only flag (disk rows only). Unset = source-derived default: allowlisted block-device sources are read-only, image files follow `mode`.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "write": {
           "description": "Mount-policy sugar: the write axis (write admission) directly on the mount row (same shape as `read`; `write.deny = [...]` / `write.allow = [...]`). Parse-time-only, normalized into `policy.write`.",
