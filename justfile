@@ -292,18 +292,6 @@ _verify-config-test-inner:
         echo "  WORKESTRATE_CONFIG_TEST_HOST=1 just config-test-golden-generate" >&2
         exit 1
     fi
-    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
-        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
-        export _WS_REENTERED=1
-        # Pure-eval devenv root: override the flake's devenv-root placeholder
-        # input with a file holding this worktree's abs path (see `shell`).
-        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-        mkdir -p "$_devenv_root_dir"
-        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-        printf '%s' "$_repo_root" > "$_devenv_root_file"
-        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-config-test-inner
-    fi
     # The fleet is directory mode, so WORKESTRATE_FLEET_DIR cannot select it
     # (that override loads <dir>/workestrate.toml as a single file-mode layer).
     # --fleet takes a registered NAME, so register the checkout as a local-path
@@ -311,12 +299,13 @@ _verify-config-test-inner:
     # come from the submodule path, never from an environment override.
     _config_dir="$(mktemp -d)"
     trap 'rm -rf "$_config_dir"' EXIT
+    nix build --no-update-lock-file --out-link "$_config_dir/workestrate" .#workestrate
     _fleet_path="$(cd "$_fleet_dir" && pwd)"
     printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_config_dir/config.toml"
     for name in "${_capsules[@]}"; do \
         env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
           -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR \
-          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_config_dir" --no-project-config --fleet "$_fleet_name" workload plan "$name" \
+          "$_config_dir/workestrate/bin/workestrate" --config "$_config_dir" --no-project-config --fleet "$_fleet_name" workload plan "$name" \
           | diff - "$_fleet_dir/golden/$name.plan.txt" \
           || (echo "config test fleet plan mismatch for $name; refresh the capsule's golden plan with 'just config-test-golden-generate'" && exit 1); \
     done
@@ -354,18 +343,6 @@ _config-test-golden-generate-inner:
         echo "FATAL: no capsules found under $_fleet_dir/workestrate/workloads" >&2
         exit 1
     fi
-    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
-        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
-        export _WS_REENTERED=1
-        # Pure-eval devenv root: override the flake's devenv-root placeholder
-        # input with a file holding this worktree's abs path (see `shell`).
-        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
-        mkdir -p "$_devenv_root_dir"
-        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
-        printf '%s' "$_repo_root" > "$_devenv_root_file"
-        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _config-test-golden-generate-inner
-    fi
     # The fleet is directory mode, so WORKESTRATE_FLEET_DIR cannot select it
     # (that override loads <dir>/workestrate.toml as a single file-mode layer).
     # --fleet takes a registered NAME, so register the checkout as a local-path
@@ -373,6 +350,7 @@ _config-test-golden-generate-inner:
     # come from the submodule path, never from an environment override.
     _tmp="$(mktemp -d)"
     trap 'rm -rf "$_tmp"' EXIT
+    nix build --no-update-lock-file --out-link "$_tmp/workestrate" .#workestrate
     _fleet_path="$(cd "$_fleet_dir" && pwd)"
     printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_tmp/config.toml"
     # Stage every plan before moving it into place: a capsule whose plan
@@ -382,7 +360,7 @@ _config-test-golden-generate-inner:
     for name in "${_capsules[@]}"; do \
         env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
           -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR \
-          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_tmp" --no-project-config --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
+          "$_tmp/workestrate/bin/workestrate" --config "$_tmp" --no-project-config --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
           || (echo "FATAL: workload plan failed for $name; no golden plan was written" >&2 && exit 1); \
     done
     mkdir -p "$_fleet_dir/golden"

@@ -6,8 +6,10 @@ behaves as declared. It is a separate repository, used by development and
 validation tooling only. User workloads never reference it. The fleet exists
 to hold the fixtures that only make sense while a feature is landing.
 
-The targets in this repository compare workload plans only. They do not start
-the capsules or run their assertions. Runtime acceptance requires the separate
+The targets in this repository build this checkout's Nix-packaged CLI and
+compare workload plans. They keep the package rooted in a temporary directory
+for the invocation; no development shell is required. They do not start the
+capsules or run their assertions. Runtime acceptance requires the separate
 launch, assertion, and teardown procedure in the fleet's `README.agents.md`.
 
 The checkout lives at `tests/fleets/workestrate-config-test` as a submodule of
