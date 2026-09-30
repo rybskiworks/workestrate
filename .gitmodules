@@ -1,0 +1,3 @@
+[submodule "tests/fleets/workestrate-config-test"]
+	path = tests/fleets/workestrate-config-test
+	url = https://github.com/rybskiworks/workestrate-config-test.git
