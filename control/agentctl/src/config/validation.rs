@@ -652,7 +652,7 @@ pub fn validate_config(config: &ConfigFile) -> Result<()> {
                     m.guest
                 );
             }
-            validate_mount_host(&m.host).map_err(|e| {
+            validate_mount_host(&m.host, m.kind).map_err(|e| {
                 anyhow::anyhow!("workload '{workload_name}' mount host validation failed: {e}")
             })?;
             validate_mount_guest(&m.guest, m.is_read_only()).map_err(|e| {
@@ -1305,6 +1305,12 @@ pub(crate) mod tests {
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             },
             crate::microsandbox::plan::MountPlan {
                 host: "second".to_string(),
@@ -1313,6 +1319,12 @@ pub(crate) mod tests {
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             },
         ];
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1331,6 +1343,12 @@ pub(crate) mod tests {
             policy: None,
             owner: None,
             policy_file: Some(std::path::PathBuf::from("/some/path")),
+
+            kind: crate::microsandbox::plan::MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }];
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
@@ -2110,6 +2128,12 @@ egress = "deny"
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             }];
             svc.seed_files[0].target = "work/x.json".to_string();
         }
@@ -2134,6 +2158,12 @@ egress = "deny"
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             }];
             svc.seed_files[0].target = "workloads/svc/config/app.json".to_string();
         }
@@ -2154,6 +2184,12 @@ egress = "deny"
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             }];
         }
         let err = validate_config(&config).unwrap_err().to_string();
@@ -2177,6 +2213,12 @@ egress = "deny"
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             }];
             svc.seed_files[0].target = "workspaces/svc-state/x.json".to_string();
         }
@@ -2383,6 +2425,12 @@ egress = "deny"
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: crate::microsandbox::plan::MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         };
         let json = serde_json::to_value(&mount).unwrap();
         assert_eq!(json["mode"], serde_json::json!("ro"));
