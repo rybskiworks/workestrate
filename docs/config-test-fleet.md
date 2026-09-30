@@ -63,6 +63,35 @@ or a different fleet while the default fleet supplies the content.
 `--fleet-dir` is a secrets-only selector ([secrets](secrets.md)); it does not
 change the fleet that `workload` commands read.
 
+The `just` targets below register nothing in the operator's config: they write a
+local-path fleet entry into a throwaway config directory for the invocation, so
+a validation host needs no `fleet add` and leaves no registry entry behind.
+
+## Run the gate
+
+```sh
+WORKESTRATE_CONFIG_TEST_HOST=1 just verify-config-test
+WORKESTRATE_CONFIG_TEST_HOST=1 just config-test-golden-generate
+```
+
+`just verify-config-test` fails unless `WORKESTRATE_CONFIG_TEST_HOST=1` is set
+and `/dev/kvm` exists. It reads the fleet from the submodule path
+`tests/fleets/workestrate-config-test`, never through `WORKESTRATE_FLEET_DIR`:
+the target registers that checkout as a local-path fleet in a throwaway config
+directory and selects it with `--fleet workestrate-config-test`. The capsules are
+enumerated from the fleet's `workestrate/workloads/`, so a capsule added to the
+fleet is covered without editing the recipe. Every capsule must have a non-empty
+`golden/<capsule>.plan.txt`; a missing golden is a hard failure that names
+`just config-test-golden-generate`. Each remaining capsule's `workload plan` is
+diffed against its golden, and the first mismatch exits 1.
+
+`just config-test-golden-generate` captures those golden plans. It applies the
+same host gate, stages every plan before moving it into place (a capsule whose
+plan fails leaves the committed goldens untouched), and writes inside the
+submodule checkout: commit the result in the fleet repository, not in this one.
+Capture the goldens on the validation host, because plan output must match the
+host the gate runs on.
+
 ## Capsules and parse status
 
 The first capsules target the mount features still pending on `main`:
@@ -91,11 +120,11 @@ is still incomplete:
 
 - Golden plans. `just verify-config-test` diffs each capsule's `workload plan`
   against `golden/<capsule>.plan.txt` in the fleet checkout, and the fleet
-  repository carries no `golden/` directory yet. The recipe reads the fleet
-  through `WORKESTRATE_FLEET_DIR`, which cannot select this directory-mode
-  fleet, so it needs the registered-name form above before it can pass. Its
-  capsule list names `box-smoke` and `disk-attach`; the fleet's third capsule,
-  `write-budget`, is not in the list.
+  repository carries no `golden/` directory yet. Until those files exist, the
+  target fails with `FATAL: missing golden plan for ...` and names the command
+  that captures them; a capsule that was never compared never reports success.
+  The capsules are enumerated from `workestrate/workloads/`, so all three
+  (`box-smoke`, `disk-attach`, `write-budget`) are covered.
 - CI wiring. Nothing in `.github/workflows/ci.yml` fetches the submodule or
   certifies KVM, so the target stays host-only.
 
@@ -104,14 +133,14 @@ configuration submodule with feature fleets). `docs/adr.md` records the
 repository convention that agent repositories are flake inputs, not submodules
 (ADR 0001, kept as history), so that decision comes before this shape is final.
 
-The recipe fails fast when `tests/fleets/workestrate-config-test` is absent, and
-it runs the capsules only on a host that sets `WORKESTRATE_CONFIG_TEST_HOST=1`
-and provides `/dev/kvm`.
+The recipe fails fast when `tests/fleets/workestrate-config-test` is absent or a
+capsule has no golden plan, and it runs the capsules only on a host that sets
+`WORKESTRATE_CONFIG_TEST_HOST=1` and provides `/dev/kvm`.
 
 ## Where to read more
 
 - The fleet repository's `README.md`: the capsule table and run instructions.
 - The fleet repository's `README.agents.md`: ownership, per-capsule
   assertions, and the safety rules for adding capsules.
-- [Testing Workestrate](testing.md): the repository gate this stub stays out
-  of.
+- [Testing Workestrate](testing.md): the repository gate this host-gated target
+  stays out of.
