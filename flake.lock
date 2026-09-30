@@ -487,17 +487,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1789858982,
-        "narHash": "sha256-jjdmPhQct2wzMMXx406hcb9psl4ZOCCx729lTQwucoQ=",
+        "lastModified": 1790809530,
+        "narHash": "sha256-UhHhR92S3Qgl6tVYG8Ou4V16RcEotrrKUbm0KKRuhMQ=",
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "fd78ad6eb1132c4132889f4e836fe5c92887c3e4",
+        "rev": "a5b7ca2b5b74a6dcf2d9fb43c4d2bfd689f147b0",
         "type": "github"
       },
       "original": {
         "owner": "rybskiworks",
         "repo": "microsandbox",
-        "rev": "fd78ad6eb1132c4132889f4e836fe5c92887c3e4",
+        "rev": "a5b7ca2b5b74a6dcf2d9fb43c4d2bfd689f147b0",
         "type": "github"
       }
     },
