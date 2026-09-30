@@ -18,9 +18,9 @@ pub(crate) fn allowed_devices() -> Vec<PathBuf> {
 }
 
 /// `true` iff `host` is an absolute path present verbatim on the operator
-/// device allowlist ([`allowed_devices`]). Pure string match on the RAW
-/// config host (no filesystem access), so plan display, config validation,
-/// plan preflight and the runtime build all agree on device-ness.
+/// device allowlist ([`allowed_devices`]). This does not access the filesystem.
+/// Planning resolves host templates before using this match to freeze disk
+/// access; preflight and runtime separately check the source's actual type.
 pub(crate) fn is_allowlisted_device(host: &str) -> bool {
     let path = Path::new(host);
     if !path.is_absolute() {
@@ -692,6 +692,7 @@ mod tests {
     use super::{MountRoots, ensure_mount_sources, preflight_existence, resolve_mount_host};
     use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
     use crate::microsandbox::plan::{MountKind, MountMode, MountPlan, NetworkPlan, SandboxPlan};
 
     // ---- ADR 0030 V-addendum §V2: instance-scoped state paths ----
@@ -1027,8 +1028,12 @@ mod tests {
     }
 
     #[test]
-    fn disk_row_read_only_defaults_to_true_for_allowlisted_device() {
-        // SAFETY: unique per-test device path; no other test asserts on it.
+    fn disk_row_read_only_defaults_to_true_for_allowlisted_device() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-test-allow-device") };
         let mut device = bind_row("/dev/wk-test-allow-device", "/mnt/dev", MountMode::Rw);
         device.kind = MountKind::Disk;
@@ -1043,8 +1048,7 @@ mod tests {
             !image.is_read_only(),
             "image file keeps the mode default (rw)"
         );
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        Ok(())
     }
 
     #[test]
@@ -1093,6 +1097,10 @@ mod tests {
 
     #[test]
     fn disk_source_unknown_device_fails_closed() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         let root = unique_root("disk-dev");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
@@ -1109,7 +1117,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&root);
             return Ok(());
         }
-        // SAFETY: unique per-test device path; removed before test end.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-other-device") };
         let host = device.to_string_lossy().into_owned();
         let mut row = bind_row(&host, "/mnt/dev", MountMode::Rw);
@@ -1120,14 +1128,16 @@ mod tests {
             matches!(&result, Err(e) if e.to_string().contains("NOT on the operator allowlist")),
             "an existing block device outside the allowlist must fail closed: got {result:?}"
         );
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
 
     #[test]
     fn disk_source_allowlisted_block_device_is_accepted() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
         let root = unique_root("disk-dev-ok");
         std::fs::create_dir_all(&root)?;
         let device = root.join("blk");
@@ -1147,14 +1157,12 @@ mod tests {
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row.clone()]);
         let roots = roots_for(&root, None, None);
-        // SAFETY: unique per-test device path; removed before test end.
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
         unsafe {
             std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", &host);
         }
         ensure_mount_sources(&roots, &plan)?;
         assert!(row.is_read_only(), "allowlisted device defaults read-only");
-        // SAFETY: per-test var; removed before test end.
-        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

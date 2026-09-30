@@ -239,6 +239,13 @@ impl ConfigWorkload {
                             return None;
                         }
                         let guest = mount.guest.clone();
+                        if mount.kind == crate::microsandbox::plan::MountKind::Disk {
+                            return Some(Err(anyhow::anyhow!(
+                                "workload '{name}' disk mount '{guest}' inherits a mount policy; \
+                                 virtio-blk attachments cannot enforce per-file mount policies; \
+                                 scope the policy to bind mounts instead"
+                            )));
+                        }
                         let program = crate::mount_policy::compile(scopes).map_err(|e| {
                             anyhow::anyhow!(
                                 "mount policy for workload '{name}' mount '{guest}' failed to compile: {e}"
@@ -601,6 +608,7 @@ impl Workload for ConfigWorkload {
         for m in &mut mounts {
             m.host =
                 resolve_mount_host_template(&m.host, self.name(), &self.build_path(), env_override);
+            m.resolve_disk_access();
         }
         // ADR 0028 companion (E0): warn-only on overlapping resolved HOST
         // dirs (the `${CWD}`-vs-state-mount case); never an error.
@@ -1765,6 +1773,53 @@ egress = "deny"
             Workload::mount_content_root(&svc).as_deref(),
             Some(guard.config_dir())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mounts_reject_inherited_global_and_workload_policies() -> Result<()> {
+        for scope in ["policy.mounts.write", "workloads.svc.policy.mounts.write"] {
+            let source = format!(
+                "schema_version = 1\n[workloads.svc]\nkind = \"service\"\n\
+                 image = {{ recipe = \"registry\", ref = \"fixture:latest\" }}\n\
+                 command = []\n[workloads.svc.network.defaults]\negress = \"deny\"\n\
+                 [[workloads.svc.mounts]]\nkind = \"disk\"\nhost = \"image.raw\"\n\
+                 guest = \"/disk\"\nreadonly = true\n[{scope}]\ndeny = [\"**\"]\n"
+            );
+            let _guard = DependsEnvGuard::new("disk-inherited-policy", &source);
+            let result = ConfigWorkload::new("svc");
+            assert!(
+                matches!(&result, Err(error) if error.to_string().contains("disk mount") && error.to_string().contains("inherits a mount policy")),
+                "scope accepted: {scope}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mount_does_not_inherit_another_bind_mounts_policy() -> Result<()> {
+        let source = r#"
+schema_version = 1
+[workloads.svc]
+kind = "service"
+image = { recipe = "registry", ref = "fixture:latest" }
+command = []
+[workloads.svc.network.defaults]
+egress = "deny"
+[[workloads.svc.mounts]]
+kind = "disk"
+host = "image.raw"
+guest = "/disk"
+readonly = true
+[[workloads.svc.mounts]]
+host = "."
+guest = "/data"
+write.deny = ["**"]
+"#;
+        let _guard = DependsEnvGuard::new("disk-bind-policy-scope", source);
+        let workload = ConfigWorkload::new("svc")?;
+        assert!(workload.mount_policy_for("/disk").is_none());
+        assert!(workload.mount_policy_for("/data").is_some());
         Ok(())
     }
 
@@ -3085,6 +3140,71 @@ egress = "deny"
         );
 
         let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_access_defaults_follow_resolved_host_and_preserve_explicit_access() -> Result<()> {
+        use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
+        use crate::microsandbox::provenance::config_hash_of_plan;
+
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES", "WORKESTRATE_INVOKE_CWD"]);
+        let invoke = crate::config::test_support::uniq_dir("disk-template-access");
+        let device = invoke.join("evidence.raw");
+        // SAFETY: the environment lock and restoration guard cover both mutations.
+        unsafe {
+            std::env::set_var(crate::config::INVOKE_CWD_ENV, &invoke);
+            std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", &device);
+        }
+        for (access, expected_readonly) in [("", true), ("readonly = false", false)] {
+            let mut plans = Vec::new();
+            for host in [
+                device.to_string_lossy().into_owned(),
+                "${CWD}/evidence.raw".into(),
+            ] {
+                let source = format!(
+                    "schema_version = 1\n[workloads.svc]\nkind = \"service\"\n\
+                     image = {{ recipe = \"registry\", ref = \"fixture:latest\" }}\n\
+                     command = []\n[workloads.svc.network.defaults]\negress = \"deny\"\n\
+                     [[workloads.svc.mounts]]\nkind = \"disk\"\nhost = {host:?}\n\
+                     guest = \"/evidence\"\n{access}\n"
+                );
+                let config: crate::config::ConfigFile = toml::from_str(&source)?;
+                let row = config
+                    .workloads
+                    .get("svc")
+                    .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+                    .mounts
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("missing mount"))?;
+                assert_eq!(
+                    row.readonly,
+                    if access.is_empty() { None } else { Some(false) }
+                );
+                let config_json = serde_json::to_value(row)?;
+                assert_eq!(config_json.get("readonly").is_none(), access.is_empty());
+                let plan = synthetic_workload(&source, "svc").plan();
+                let mount = plan
+                    .mounts
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("missing planned mount"))?;
+                assert_eq!(mount.host, device.to_string_lossy());
+                assert_eq!(mount.readonly, Some(expected_readonly));
+                assert_eq!(mount.is_read_only(), expected_readonly);
+                let json = serde_json::to_string(&plan)?;
+                let decoded: SandboxPlan = serde_json::from_str(&json)?;
+                assert_eq!(config_hash_of_plan(&decoded), config_hash_of_plan(&plan));
+                plans.push(plan);
+            }
+            assert_eq!(
+                config_hash_of_plan(&plans[0]),
+                config_hash_of_plan(&plans[1]),
+                "literal and templated references to the same source must enforce identical access"
+            );
+        }
         Ok(())
     }
 

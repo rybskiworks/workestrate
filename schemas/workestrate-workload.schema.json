@@ -1260,7 +1260,7 @@
           "type": "boolean"
         },
         "readonly": {
-          "description": "Read-only flag (disk rows only). Unset = source-derived default: allowlisted block-device sources are read-only, image files follow `mode`.",
+          "description": "Read-only flag (disk rows only). Unset = source-derived default: allowlisted block-device sources are read-only, image files follow `mode`. Planning folds the effective value after resolving the host.",
           "default": null,
           "type": [
             "boolean",
