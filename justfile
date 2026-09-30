@@ -244,8 +244,8 @@ _golden-check-inner:
     done
 
 # The config test fleet submodule (tests/fleets/workestrate-config-test) carries
-# one capsule per feature; the golden plan files and the CI wiring still land
-# with the fleet repository. This target compares plans without starting guests.
+# one capsule per feature and its reviewed golden plan. This target compares
+# plans without starting guests.
 # Plans retain the explicit validation-host gate and its KVM prerequisite.
 # Verify the config test fleet capsules against their golden plan output.
 verify-config-test:

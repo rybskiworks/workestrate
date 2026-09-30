@@ -12,8 +12,8 @@ launch, assertion, and teardown procedure in the fleet's `README.agents.md`.
 
 The checkout lives at `tests/fleets/workestrate-config-test` as a submodule of
 this repository, pinned DETACHED at the commit the superproject gitlink records
-(`git submodule status` prints the live pin). The capsule table, the assertions each capsule makes, and the fleet's own
-safety rules live in that repository's `README.md` and `README.agents.md`; do
+(`git submodule status` prints the live pin). The capsule table, the assertions
+each capsule makes, and the fleet's own safety rules live in that repository's `README.md` and `README.agents.md`; do
 not duplicate them here.
 
 ## Fetch the submodule
