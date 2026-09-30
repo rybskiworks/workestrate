@@ -354,10 +354,15 @@ pub struct MountPlan {
     /// Inner filesystem type for `kind = "disk"` rows (e.g. `"ext4"`).
     /// Unset = agentd probes `/proc/filesystems` in the guest.
     pub fstype: Option<String>,
-    /// Explicit read-only flag for `kind = "disk"` rows. Unset = the
-    /// source-derived default: operator-allowlisted DEVICE sources are
-    /// read-only (fail-closed posture), image files follow `mode`.
+    /// Explicit read-only flag for `kind = "disk"` rows. At the wire level,
+    /// unset = the source-derived default: operator-allowlisted DEVICE
+    /// sources are read-only (fail-closed posture), image files follow
+    /// `mode`. Parsing folds that effective default INTO `readonly`, so a
+    /// canonical row (and its serialized plan JSON and provenance hash)
+    /// always carries the access the runtime will enforce.
     pub readonly: Option<bool>,
+    // NOTE: `attach_only` is deliberately absent — see the note on
+    // [`MountPlanWire`] for the vendored-fork ordering.
 }
 
 impl MountPlan {
@@ -369,7 +374,10 @@ impl MountPlan {
     ///
     /// Disk rows: an explicit `readonly` declaration wins; an
     /// operator-allowlisted raw block device defaults to read-only even when
-    /// `mode` was left at its default; image files follow `mode`.
+    /// `mode` was left at its default; image files follow `mode`. Parsed rows
+    /// always carry that effective value in `readonly` (folded at parse
+    /// time), so plan display, serialized JSON, provenance hash and the SDK
+    /// wiring all read the same access.
     pub fn is_read_only(&self) -> bool {
         match self.kind {
             MountKind::Bind => self.mode == MountMode::Ro,
@@ -388,6 +396,16 @@ impl MountPlan {
 /// matches exactly what the parser accepts. `deny_unknown_fields` keeps the
 /// removed sugar words (`mask`/`unmask`/`protect`/`writes_deny`) hard parse
 /// errors rather than silently ignored keys.
+///
+/// NOTE — `attach_only` is deliberately NOT a field yet. Workestrate vendors
+/// the microsandbox fork at control/agentctl/vendor/microsandbox-fork
+/// (patched by .cargo/config.toml path patches, prepared by `just
+/// sdk-prepare`), and the fork's `.attach_only()` disk option only exists on
+/// the unmerged msb branch feat/attach-only-disk — a wire field here cannot
+/// compile until that branch merges and the vendored pin is bumped. Until
+/// then every disk row is mounted during agentd boot. When the fork catches
+/// up: add the wire field here, thread it through `TryFrom` (conflict checks
+/// against `readonly`) and `configure_disk_mount` (mounts.rs).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -411,7 +429,7 @@ struct MountPlanWire {
     fstype: Option<String>,
     /// Read-only flag (disk rows only). Unset = source-derived default:
     /// allowlisted block-device sources are read-only, image files follow
-    /// `mode`.
+    /// `mode`. Parsing folds the effective value into the canonical row.
     #[serde(default)]
     readonly: Option<bool>,
     /// DEPRECATED alias for `mode` (`true` ≡ "ro", `false` ≡ "rw"); accepted
@@ -543,6 +561,20 @@ impl TryFrom<MountPlanWire> for MountPlan {
             }
             (_, wire_readonly) => (mode, wire_readonly),
         };
+        // Fold the EFFECTIVE disk read-only default into the canonical row so
+        // the serialized plan JSON and its provenance hash agree with runtime
+        // semantics: an out-of-process consumer (or a differently-configured
+        // environment) must see the same access the plan will enforce. An
+        // undeclared `readonly` on a disk row means "source-derived":
+        // operator-allowlisted block devices default to read-only
+        // (fail-closed, see [`super::mounts::is_allowlisted_device`]); image
+        // files follow `mode`. Bind rows never reach here (rejected above).
+        let readonly = match (kind, readonly) {
+            (MountKind::Disk, None) => Some(
+                mode == MountMode::Ro || super::mounts::is_allowlisted_device(&wire.host),
+            ),
+            (_, readonly) => readonly,
+        };
         // Mount-policy sugar normalization: `read`/`write` sub-tables on the
         // row concatenate INTO the mount's `policy` fragment (AFTER any
         // explicitly-declared `policy` table entries; both forms may mix).
@@ -600,9 +632,11 @@ impl Serialize for MountPlan {
         // Canonical form only: `mode` is always emitted; `read_only` is NEVER
         // serialized. `owner`/`policy`/`policy_file` stay skip-when-None so plan JSON
         // without them is byte-identical to the legacy form. Issue #109
-        // fields are emitted only when they deviate from the defaults
-        // (`kind` bind, `quota_mib`/`format`/`fstype`/`readonly` unset), so
-        // pre-existing plan JSON stays byte-identical.
+        // fields are emitted only when they deviate from the defaults (`kind`
+        // bind, `quota_mib`/`format`/`fstype` unset) — except `readonly`, which
+        // parsing folds to the EFFECTIVE disk access, so every disk plan JSON
+        // states the read-only state the runtime will enforce. All-bind legacy
+        // plans keep the pre-#109 bytes.
         let mut n = 3;
         if self.owner.is_some() {
             n += 1;
@@ -1509,7 +1543,7 @@ network: egress_default=deny ingress_default=deny
     }
 
     #[test]
-    fn mount_row_disk_accepted_with_read_only_default_for_device() {
+    fn mount_row_disk_accepted_with_read_only_default_for_device() -> anyhow::Result<()> {
         // SAFETY: unique per-test device path; no other test asserts on it.
         unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-plan-allow") };
         let row = parse_row(r#"{"host":"/dev/wk-plan-allow","guest":"/mnt/dev","kind":"disk"}"#);
@@ -1519,13 +1553,65 @@ network: egress_default=deny ingress_default=deny
             MountMode::Rw,
             "mode stays default when undeclared"
         );
-        assert_eq!(row.readonly, None, "no explicit readonly declaration");
+        assert_eq!(
+            row.readonly,
+            Some(true),
+            "the effective device read-only default is folded into the canonical row"
+        );
         assert!(
             row.is_read_only(),
             "allowlisted device source defaults to read-only"
         );
+        // The fold is not only in-memory: the serialized plan states the
+        // enforced access so an out-of-process consumer sees it too.
+        let json = serde_json::to_string(&row)?;
+        assert!(json.contains(r#""readonly":true"#), "json: {json}");
         // SAFETY: per-test var; removed before test end.
         unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        Ok(())
+    }
+
+    #[test]
+    fn mount_row_disk_image_default_readonly_follows_mode() -> anyhow::Result<()> {
+        // A non-allowlisted IMAGE source with no declared access: the fold is
+        // false (image files follow the default mode rw) and is serialized so
+        // the artifact matches the runtime.
+        let row = parse_row(r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk"}"#);
+        assert_eq!(row.readonly, Some(false), "image source: mode default rw");
+        assert!(!row.is_read_only());
+        let json = serde_json::to_string(&row)?;
+        assert!(json.contains(r#""readonly":false"#), "json: {json}");
+        Ok(())
+    }
+
+    #[test]
+    fn mount_row_disk_allowlisted_device_readonly_beats_declared_mode() -> anyhow::Result<()> {
+        // An EXPLICIT mode:"rw" cannot override the device fail-closed
+        // default; the canonical row folds readonly=true and serializes it.
+        // SAFETY: unique per-test device path; no other test asserts on it.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-plan-fold-allow") };
+        let row = parse_row(
+            r#"{"host":"/dev/wk-plan-fold-allow","guest":"/mnt/dev","kind":"disk","mode":"rw"}"#,
+        );
+        assert_eq!(row.readonly, Some(true), "allowlisted device stays read-only");
+        assert!(row.is_read_only());
+        let json = serde_json::to_string(&row)?;
+        assert!(json.contains(r#""readonly":true"#), "json: {json}");
+        // SAFETY: per-test var; removed before test end.
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        Ok(())
+    }
+
+    #[test]
+    fn mount_row_disk_folded_readonly_round_trips_stably() -> anyhow::Result<()> {
+        // The folded artifact re-parses to the identical canonical row, so
+        // serialized and in-memory access semantics can never drift.
+        let row = parse_row(r#"{"host":"/dev/wk-plan-roundtrip","guest":"/mnt","kind":"disk"}"#);
+        assert_eq!(row.readonly, Some(false), "not allowlisted in this test env");
+        let json = serde_json::to_string(&row)?;
+        let again: MountPlan = serde_json::from_str(&json)?;
+        assert_eq!(again, row);
+        Ok(())
     }
 
     #[test]
@@ -1571,27 +1657,29 @@ network: egress_default=deny ingress_default=deny
     }
 
     #[test]
-    fn mount_row_serialize_keeps_legacy_bind_byte_identical() {
+    fn mount_row_serialize_keeps_legacy_bind_byte_identical() -> anyhow::Result<()> {
         let row = parse_row(r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#);
         assert_eq!(
-            serde_json::to_string(&row).unwrap(),
+            serde_json::to_string(&row)?,
             r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#,
             "legacy bind plan JSON must stay byte-identical"
         );
+        Ok(())
     }
 
     #[test]
-    fn mount_row_serialize_disk_emits_kind_and_options() {
+    fn mount_row_serialize_disk_emits_kind_and_options() -> anyhow::Result<()> {
         let row = parse_row(
             r#"{"host":"/dev/wk-serial","guest":"/mnt/dev","kind":"disk","readonly":true}"#,
         );
-        let json = serde_json::to_string(&row).unwrap();
+        let json = serde_json::to_string(&row)?;
         assert!(json.contains(r#""kind":"disk""#), "json: {json}");
         assert!(json.contains(r#""readonly":true"#), "json: {json}");
         // An explicit quota on a bind row is serialized too.
         let row = parse_row(r#"{"host":"state","guest":"/data","quota_mib":512}"#);
-        let json = serde_json::to_string(&row).unwrap();
+        let json = serde_json::to_string(&row)?;
         assert!(json.contains(r#""quota_mib":512"#), "json: {json}");
+        Ok(())
     }
 
     #[test]

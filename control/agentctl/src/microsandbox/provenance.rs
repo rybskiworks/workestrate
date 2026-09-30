@@ -271,8 +271,10 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
     // Issue #109 attachment fields hashed only when declared — a quota/kind/
     // format/fstype/readonly change MUST skew the config hash (a previously
     // running instance with identical guest/host/mode would otherwise be
-    // reused unchanged). Legacy plans (all-bind, all-unset) never reach the
-    // group, preserving their hashes.
+    // reused unchanged). Parsed disk rows always carry the folded effective
+    // `readonly` (see plan.rs), so the group always fires for disk rows and
+    // explicitly records the enforced access. Legacy plans (all-bind,
+    // all-unset) never reach the group, preserving their hashes.
     if plan.mounts.iter().any(|m| {
         m.kind != crate::microsandbox::plan::MountKind::Bind
             || m.quota_mib.is_some()
@@ -890,7 +892,7 @@ mod tests {
 
     /// Runtime-relevant edits DO churn the hash.
     #[test]
-    fn runtime_relevant_edits_churn_the_hash() {
+    fn runtime_relevant_edits_churn_the_hash() -> anyhow::Result<()> {
         let base_hash = config_hash_of_plan(&empty_plan());
 
         let mut edited = empty_plan();
@@ -1041,6 +1043,35 @@ mod tests {
             "mount-policy fragment edit"
         );
 
+        // S1-1: the allowlist-derived read-only default is folded into the
+        // canonical row, so it MUST skew the hash — two environments that
+        // disagree on the allowlist must not agree on the plan identity.
+        let plan_for = |json: &str| -> anyhow::Result<SandboxPlan> {
+            let mut plan = empty_plan();
+            plan.mounts = vec![serde_json::from_str(json)?];
+            Ok(plan)
+        };
+        let device_json = r#"{"host":"/dev/wk-hash-allow","guest":"/mnt/dev","kind":"disk"}"#;
+        let base_plan = plan_for(device_json)?;
+        let base_hash = config_hash_of_plan(&base_plan);
+        assert!(
+            !canonical_plan_bytes(&base_plan).contains("ro=1"),
+            "unlisted device must not hash as read-only"
+        );
+        // SAFETY: unique per-test device path; removed before test end.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-hash-allow") };
+        let allowed = plan_for(device_json)?;
+        unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
+        assert_ne!(
+            config_hash_of_plan(&allowed),
+            base_hash,
+            "allowlisted device default-RO must skew the provenance hash"
+        );
+        assert!(
+            canonical_plan_bytes(&allowed).contains("ro=1"),
+            "allowlisted device fold must hash ro=1"
+        );
+
         // Network edits → DIFFERENT.
         let mut dd = empty_plan();
         dd.network.egress_default_deny = true;
@@ -1063,6 +1094,7 @@ mod tests {
             scope: Scope::Local,
         }];
         assert_ne!(config_hash_of_plan(&ing), base_hash, "ingress rule");
+        Ok(())
     }
 
     /// SSH policy (`sshpolicy` group 10): enforcement-relevant edits churn.
