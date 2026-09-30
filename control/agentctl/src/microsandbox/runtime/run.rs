@@ -2588,6 +2588,12 @@ mod tests {
                 policy: None,
                 owner: None,
                 policy_file: None,
+
+                kind: crate::microsandbox::plan::MountKind::Bind,
+                quota_mib: None,
+                format: None,
+                fstype: None,
+                readonly: None,
             }];
             p.ports = vec![PortMapping::new(4000, 4000)];
             p

@@ -1,7 +1,33 @@
-use super::plan::{MountPlan, SandboxPlan};
+use super::plan::{MountKind, MountPlan, SandboxPlan};
 use anyhow::Result;
 use microsandbox::sandbox::{MountBuilder, SandboxBuilder};
 use std::path::{Component, Path, PathBuf};
+
+/// Operator device allowlist for `kind = "disk"` mounts (issue #109):
+/// colon-separated ABSOLUTE block-device paths from the
+/// `WORKESTRATE_ALLOWED_DEVICES` environment variable (e.g.
+/// `WORKESTRATE_ALLOWED_DEVICES=/dev/sda3:/dev/nvme0n1p2`). An empty or
+/// absent allowlist permits NO device sources anywhere — device mounts fail
+/// closed until an operator explicitly allows the exact path. This
+/// env-var surface is intentionally minimal; the fuller `${DEVICES}<name>`
+/// registry surface is a tracked follow-up.
+pub(crate) fn allowed_devices() -> Vec<PathBuf> {
+    std::env::var_os("WORKESTRATE_ALLOWED_DEVICES")
+        .map(|v| std::env::split_paths(&v).collect())
+        .unwrap_or_default()
+}
+
+/// `true` iff `host` is an absolute path present verbatim on the operator
+/// device allowlist ([`allowed_devices`]). This does not access the filesystem.
+/// Planning resolves host templates before using this match to freeze disk
+/// access; preflight and runtime separately check the source's actual type.
+pub(crate) fn is_allowlisted_device(host: &str) -> bool {
+    let path = Path::new(host);
+    if !path.is_absolute() {
+        return false;
+    }
+    allowed_devices().iter().any(|allowed| allowed == path)
+}
 
 /// Roots for resolving mount hosts (F1/F2 — spec 17 path resolution).
 #[derive(Debug, Clone, Copy)]
@@ -98,11 +124,15 @@ pub(crate) fn instance_scoped_state_path(path: &str, workload: &str, key: Option
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
-/// Rules (closes review finding A2):
+/// Rules (issue #109 adds the disk axis):
 /// 1. Reject empty strings.
-/// 2. Reject absolute paths (leading `/`). Config authors must use a
-///    template prefix (`${CWD}/...`, `${MSB_HOME}/...`) or a relative path
-///    that resolves under the declaring config layer's content directory.
+/// 2. Reject absolute paths (leading `/`) for `kind = "bind"` rows. Config
+///    authors must use a template prefix (`${CWD}/...`, `${MSB_HOME}/...`) or
+///    a relative path that resolves under the declaring config layer's
+///    content directory. `kind = "disk"` rows MAY use absolute paths (a
+///    device path such as `/dev/sda3` or an absolute image file); block
+///    devices must additionally be on the operator allowlist
+///    ([`is_allowlisted_device`]) or the mount fails closed at plan/runtime.
 /// 3. Reject any `..` path component anywhere in the string. Template
 ///    prefixes are not traversal escapes — `${CWD}/../../etc` is still
 ///    rejected because the suffix contains `..`.
@@ -112,14 +142,16 @@ pub(crate) fn instance_scoped_state_path(path: &str, workload: &str, key: Option
 /// - `workspaces/...`, `var/...` (resolved to XDG state dir)
 /// - any other relative path with no `..` component (resolved against the
 ///   declaring config layer's content directory — see [`MountRoots`])
-pub fn validate_mount_host(host: &str) -> Result<()> {
+/// - `kind = "disk"` only: absolute paths (device or image sources)
+pub fn validate_mount_host(host: &str, kind: MountKind) -> Result<()> {
     if host.is_empty() {
         anyhow::bail!("mount host cannot be empty");
     }
-    if host.starts_with('/') {
+    if host.starts_with('/') && kind == MountKind::Bind {
         anyhow::bail!(
             "mount host cannot be an absolute path (got '{host}'); use a relative path, \
-             ${{CWD}}/..., ${{MSB_HOME}}/..., workspaces/..., or var/..."
+             ${{CWD}}/..., ${{MSB_HOME}}/..., workspaces/..., or var/... \
+             (absolute disk/device hosts require kind = \"disk\")"
         );
     }
     // Walk components and reject any `..`. Template prefixes like ${CWD} are
@@ -191,11 +223,19 @@ pub(crate) fn apply_plan_mounts(
     let mut b = builder;
     for m in &plan.mounts {
         let host = resolve_mount_host(roots, &m.host)?;
-        b = b.volume(&m.guest, |v| configure_bind_mount(v, host, m));
+        b = match m.kind {
+            MountKind::Bind => b.volume(&m.guest, |v| configure_bind_mount(v, host, m)),
+            MountKind::Disk => b.volume(&m.guest, |v| configure_disk_mount(v, host, m)),
+        };
     }
     Ok(b)
 }
 
+/// Wire one bind mount into the SDK builder. The BIND path is kept
+/// byte-for-byte compatible with the pre-#109 behavior: `.bind(host)`,
+/// optional owner, optional compiled policy token, readonly from
+/// [`MountPlan::is_read_only`] — plus the optional `.quota(q)` only when
+/// `quota_mib` is declared (unset keeps the SDK's protective default).
 fn configure_bind_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountBuilder {
     let v = v.bind(host);
     let v = match m.owner {
@@ -208,21 +248,99 @@ fn configure_bind_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
         Some(pf) => v.mount_policy(pf),
         None => v,
     };
+    let v = match m.quota_mib {
+        Some(quota_mib) => v.quota(quota_mib),
+        None => v,
+    };
+    if m.is_read_only() { v.readonly() } else { v }
+}
+
+/// Wire one `kind = "disk"` mount into the SDK builder as a virtio-blk
+/// attachment: `v.disk(host).format(f).fstype(opt).readonly(...)` (issue
+/// #109). Optional `format`/`fstype` map to SDK overrides; when absent the
+/// SDK infers the format from the host extension and lets agentd probe the
+/// guest filesystem. Read-only follows [`MountPlan::is_read_only`] (device
+/// sources default read-only). Bind-only options (owner, quota, policy) are
+/// intentionally never applied here.
+fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountBuilder {
+    let v = v.disk(host);
+    let v = match m.format {
+        Some(format) => v.format(format.to_sdk()),
+        None => v,
+    };
+    let v = match &m.fstype {
+        Some(fstype) => v.fstype(fstype.clone()),
+        None => v,
+    };
     if m.is_read_only() { v.readonly() } else { v }
 }
 
 pub(crate) fn ensure_mount_sources(roots: &MountRoots, plan: &SandboxPlan) -> Result<()> {
     for m in &plan.mounts {
         let path = resolve_mount_host(roots, &m.host)?;
-        if !path.exists() {
-            if m.is_read_only() {
-                anyhow::bail!("mount source does not exist: {}", path.display());
-            } else {
-                std::fs::create_dir_all(&path)?;
+        match m.kind {
+            // Bind path unchanged (issue #109 rule: the bind path stays
+            // compatible): RO must exist, RW is auto-created.
+            MountKind::Bind => {
+                if !path.exists() {
+                    if m.is_read_only() {
+                        anyhow::bail!("mount source does not exist: {}", path.display());
+                    } else {
+                        std::fs::create_dir_all(&path)?;
+                    }
+                }
             }
+            // Disk sources are NEVER auto-created and fail closed: they must
+            // be an existing regular image file or an operator-allowlisted
+            // block device (metadata-checked).
+            MountKind::Disk => ensure_disk_source(m, &path)?,
         }
     }
     Ok(())
+}
+
+/// Shared disk-source acceptance check (`ensure_mount_sources` runtime and
+/// `preflight_existence` plan-time agree): a `kind = "disk"` host must be an
+/// EXISTING regular file (image) or an EXISTING block device on the operator
+/// allowlist. Anything else — a missing path, a directory, or an unlisted
+/// device — fails closed. Returns the human-readable error string instead of
+/// bailing so the plan-time preflight can downgrade it to a warning in
+/// validate-config mode.
+fn disk_source_issue(m: &MountPlan, path: &Path) -> Result<(), String> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            return Err(format!(
+                "disk mount source does not exist (kind=\"disk\" sources are never auto-created): {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    use std::os::unix::fs::FileTypeExt;
+    if meta.is_file() {
+        // Existing disk image file — allowed regardless of path shape
+        // (relative image paths keep the bind resolution policy).
+        return Ok(());
+    }
+    if meta.file_type().is_block_device() {
+        if is_allowlisted_device(&m.host) {
+            return Ok(());
+        }
+        return Err(format!(
+            "disk mount source {} is a block device NOT on the operator allowlist \
+             (WORKESTRATE_ALLOWED_DEVICES); unknown device sources fail closed",
+            path.display()
+        ));
+    }
+    Err(format!(
+        "disk mount source {} is neither a regular image file nor an allowlisted \
+         block device (got a directory/special file); disk sources fail closed",
+        path.display()
+    ))
+}
+
+fn ensure_disk_source(m: &MountPlan, path: &Path) -> Result<()> {
+    disk_source_issue(m, path).map_err(anyhow::Error::msg)
 }
 
 /// Owned companion to [`MountRoots`] (which borrows). Resolved once, then
@@ -414,29 +532,46 @@ pub(crate) fn preflight_existence(
     let mut warnings = Vec::new();
 
     // Mounts: resolve each host the same way `apply_plan_mounts` does, then
-    // check existence. RO missing → hard error (plan) / warning (validate);
-    // RW missing → always a warning (auto-created at runtime).
+    // check existence. Bind RO missing → hard error (plan) / warning
+    // (validate); bind RW missing → always a warning (auto-created at
+    // runtime). Disk sources are NEVER auto-created: missing, wrong-typed, or
+    // unallowlisted sources fail closed via `disk_source_issue` (hard mode
+    // bails; warn mode collects).
     for m in &plan.mounts {
         let path = resolve_mount_host(roots, &m.host)?;
-        if !path.exists() {
-            if m.is_read_only() {
-                let msg = format!(
-                    "workload '{}': read-only mount source does not exist: {} (host = {:?})",
-                    workload_name,
-                    path.display(),
-                    m.host
-                );
-                if hard {
-                    anyhow::bail!("{msg}");
-                } else {
-                    warnings.push(msg);
+        match m.kind {
+            MountKind::Bind => {
+                if !path.exists() {
+                    if m.is_read_only() {
+                        let msg = format!(
+                            "workload '{}': read-only mount source does not exist: {} (host = {:?})",
+                            workload_name,
+                            path.display(),
+                            m.host
+                        );
+                        if hard {
+                            anyhow::bail!("{msg}");
+                        } else {
+                            warnings.push(msg);
+                        }
+                    } else {
+                        warnings.push(format!(
+                            "workload '{}': read-write mount source does not exist (will be created at runtime): {}",
+                            workload_name,
+                            path.display()
+                        ));
+                    }
                 }
-            } else {
-                warnings.push(format!(
-                    "workload '{}': read-write mount source does not exist (will be created at runtime): {}",
-                    workload_name,
-                    path.display()
-                ));
+            }
+            MountKind::Disk => {
+                if let Err(issue) = disk_source_issue(m, &path) {
+                    let msg = format!("workload '{}': {issue}", workload_name);
+                    if hard {
+                        anyhow::bail!("{msg}");
+                    } else {
+                        warnings.push(msg);
+                    }
+                }
             }
         }
     }
@@ -547,6 +682,7 @@ pub(crate) fn preflight_existence(
 
 #[cfg(test)]
 #[allow(
+    unsafe_code,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
@@ -556,7 +692,8 @@ mod tests {
     use super::{MountRoots, ensure_mount_sources, preflight_existence, resolve_mount_host};
     use super::{expand_seed_glob, instance_scoped_state_path, literal_glob_root};
     use super::{validate_mount_guest, validate_mount_host};
-    use crate::microsandbox::plan::{MountMode, MountPlan, NetworkPlan, SandboxPlan};
+    use crate::config::test_support::{ENV_TEST_LOCK, EnvGuard};
+    use crate::microsandbox::plan::{MountKind, MountMode, MountPlan, NetworkPlan, SandboxPlan};
 
     // ---- ADR 0030 V-addendum §V2: instance-scoped state paths ----
 
@@ -707,6 +844,12 @@ mod tests {
                     owner,
                     policy: None,
                     policy_file: Some("instance/data.json".into()),
+
+                    kind: MountKind::Bind,
+                    quota_mib: None,
+                    format: None,
+                    fstype: None,
+                    readonly: None,
                 };
                 let built =
                     super::configure_bind_mount(MountBuilder::new("/data"), source.clone(), &row)
@@ -755,6 +898,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -783,6 +932,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
 
         let result =
@@ -793,6 +948,254 @@ mod tests {
             result
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    // ---- Issue #109: disk attachments + per-mount bind write budgets ----
+
+    fn bind_row(host: &str, guest: &str, mode: MountMode) -> MountPlan {
+        MountPlan {
+            host: host.into(),
+            guest: guest.into(),
+            mode,
+            policy: None,
+            owner: None,
+            policy_file: None,
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
+        }
+    }
+
+    #[test]
+    fn bind_mount_explicit_quota_threads_through_to_sdk() -> anyhow::Result<()> {
+        use microsandbox::sandbox::{MountBuilder, VolumeMount};
+        let mut row = bind_row("state", "/data", MountMode::Rw);
+        row.quota_mib = Some(2048);
+        let built = super::configure_bind_mount(MountBuilder::new("/data"), "state".into(), &row)
+            .build()?;
+        let VolumeMount::Bind { quota_mib, .. } = built else {
+            panic!("expected native bind mount");
+        };
+        assert_eq!(quota_mib, Some(2048), "declared quota must reach the SDK");
+        // Unset keeps the SDK's default (None here = no explicit `.quota()`).
+        let row = bind_row("state", "/data", MountMode::Rw);
+        let built = super::configure_bind_mount(MountBuilder::new("/data"), "state".into(), &row)
+            .build()?;
+        let VolumeMount::Bind { quota_mib, .. } = built else {
+            panic!("expected native bind mount");
+        };
+        assert_eq!(quota_mib, None, "unset quota must stay unset (SDK default)");
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mount_wires_virtio_blk_options() -> anyhow::Result<()> {
+        use crate::microsandbox::plan::DiskFormat;
+        use microsandbox::sandbox::{DiskImageFormat, MountBuilder, VolumeMount};
+        let mut row = bind_row("/srv/evidence.qcow2", "/mnt/evidence", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        row.format = Some(DiskFormat::Qcow2);
+        row.fstype = Some("ext4".into());
+        row.readonly = Some(true);
+        let built = super::configure_disk_mount(
+            MountBuilder::new("/mnt/evidence"),
+            "/srv/evidence.qcow2".into(),
+            &row,
+        )
+        .build()?;
+        let VolumeMount::DiskImage {
+            host,
+            format,
+            fstype,
+            options,
+            ..
+        } = built
+        else {
+            panic!("expected disk image mount");
+        };
+        assert_eq!(host, std::path::PathBuf::from("/srv/evidence.qcow2"));
+        assert_eq!(format, DiskImageFormat::Qcow2);
+        assert_eq!(fstype.as_deref(), Some("ext4"));
+        assert!(
+            options.readonly,
+            "explicit readonly=true must reach the SDK"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disk_row_read_only_defaults_to_true_for_allowlisted_device() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-test-allow-device") };
+        let mut device = bind_row("/dev/wk-test-allow-device", "/mnt/dev", MountMode::Rw);
+        device.kind = MountKind::Disk;
+        assert!(
+            device.is_read_only(),
+            "allowlisted device source must default to read-only even with mode default rw"
+        );
+        // An image file (not an absolute allowlisted device) follows `mode`.
+        let mut image = bind_row("images/evidence.raw", "/mnt/img", MountMode::Rw);
+        image.kind = MountKind::Disk;
+        assert!(
+            !image.is_read_only(),
+            "image file keeps the mode default (rw)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disk_source_missing_fails_closed_never_auto_created() -> anyhow::Result<()> {
+        let root = unique_root("disk-missing");
+        let mut row = bind_row("missing/evidence.qcow2", "/mnt/img", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row]);
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("never auto-created")),
+            "disk sources must never be auto-created: got {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_source_existing_image_file_is_accepted() -> anyhow::Result<()> {
+        let root = unique_root("disk-image");
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(root.join("evidence.raw"), b"disk")?;
+        let mut row = bind_row("evidence.raw", "/mnt/img", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row]);
+        ensure_mount_sources(&roots_for(&root, None, None), &plan)?;
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_source_directory_is_rejected() -> anyhow::Result<()> {
+        let root = unique_root("disk-dir");
+        std::fs::create_dir_all(root.join("notanimage"))?;
+        let mut row = bind_row("notanimage", "/mnt/img", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row]);
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("neither a regular image file")),
+            "a directory is not a disk source: got {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_source_unknown_device_fails_closed() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        let root = unique_root("disk-dev");
+        std::fs::create_dir_all(&root)?;
+        let device = root.join("blk");
+        let device_str = device
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("device path is not UTF-8: {}", device.display()))?;
+        let mknod_status = std::process::Command::new("mknod")
+            .args([device_str, "b", "7", "200"])
+            .status();
+        if !mknod_status.is_ok_and(|s| s.success()) {
+            // Not root / no mknod: the branch cannot be exercised here; the
+            // allowlisted path below still covers metadata resolution.
+            eprintln!("mknod unavailable; skipping unlisted-device branch");
+            let _ = std::fs::remove_dir_all(&root);
+            return Ok(());
+        }
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
+        unsafe { std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", "/dev/wk-other-device") };
+        let host = device.to_string_lossy().into_owned();
+        let mut row = bind_row(&host, "/mnt/dev", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row]);
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("NOT on the operator allowlist")),
+            "an existing block device outside the allowlist must fail closed: got {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_source_allowlisted_block_device_is_accepted() -> anyhow::Result<()> {
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment test lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(&["WORKESTRATE_ALLOWED_DEVICES"]);
+        let root = unique_root("disk-dev-ok");
+        std::fs::create_dir_all(&root)?;
+        let device = root.join("blk");
+        let device_str = device
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("device path is not UTF-8: {}", device.display()))?;
+        let mknod_status = std::process::Command::new("mknod")
+            .args([device_str, "b", "7", "201"])
+            .status();
+        if !mknod_status.is_ok_and(|s| s.success()) {
+            eprintln!("mknod unavailable; skipping allowlisted-device branch");
+            let _ = std::fs::remove_dir_all(&root);
+            return Ok(());
+        }
+        let host = device.to_string_lossy().into_owned();
+        let mut row = bind_row(&host, "/mnt/dev", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row.clone()]);
+        let roots = roots_for(&root, None, None);
+        // SAFETY: ENV_TEST_LOCK serializes allowlist changes; EnvGuard restores the original.
+        unsafe {
+            std::env::set_var("WORKESTRATE_ALLOWED_DEVICES", &host);
+        }
+        ensure_mount_sources(&roots, &plan)?;
+        assert!(row.is_read_only(), "allowlisted device defaults read-only");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_disk_missing_fails_hard_and_warns_in_warn_mode() -> anyhow::Result<()> {
+        let root = unique_root("disk-pf");
+        let mut row = bind_row("missing/evidence.qcow2", "/mnt/img", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        let plan = minimal_plan(vec![row]);
+        let result = preflight_existence(
+            &roots_for(&root, None, None),
+            &plan,
+            &[],
+            None,
+            None,
+            "svc",
+            true,
+        );
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("never auto-created")),
+            "hard: got {result:?}"
+        );
+        let warnings = preflight_existence(
+            &roots_for(&root, None, None),
+            &plan,
+            &[],
+            None,
+            None,
+            "svc",
+            false,
+        )?;
+        assert_eq!(warnings.len(), 1, "warn mode collects: {warnings:?}");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
@@ -874,9 +1277,18 @@ mod tests {
     // ---- A2 regression: validate_mount_host rejects hostile inputs ----
 
     #[test]
-    fn validate_mount_host_rejects_absolute_paths() {
-        let err = validate_mount_host("/etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("absolute path"), "got: {err}");
+    fn validate_mount_host_rejects_absolute_paths_for_bind_rows() -> anyhow::Result<()> {
+        // A bind row may never reference an absolute host path ...
+        let result = validate_mount_host("/etc/passwd", MountKind::Bind);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("absolute path")),
+            "bind row with absolute host must fail closed: got {result:?}"
+        );
+        // ... while an absolute DEVICE/IMAGE host is the point of a disk row
+        // (device sources are still allowlist-checked at plan/runtime).
+        validate_mount_host("/dev/sda3", MountKind::Disk)?;
+        validate_mount_host("/srv/images/evidence.raw", MountKind::Disk)?;
+        Ok(())
     }
 
     #[test]
@@ -892,17 +1304,25 @@ mod tests {
             "var/../../etc",
             "agents/pi/../../../etc",
         ] {
-            let err = validate_mount_host(hostile).unwrap_err();
+            let result = validate_mount_host(hostile, MountKind::Bind);
             assert!(
-                err.to_string().contains(".."),
-                "hostile='{hostile}' should be rejected for traversal; got: {err}"
+                matches!(&result, Err(e) if e.to_string().contains("..")),
+                "hostile='{hostile}' should be rejected for traversal; got {result:?}"
+            );
+            // Traversal is rejected for disk rows too (no path shape escapes
+            // the mount-root / allowlist discipline).
+            let result = validate_mount_host(hostile, MountKind::Disk);
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains("..")),
+                "hostile='{hostile}' should be rejected for traversal; got {result:?}"
             );
         }
     }
 
     #[test]
     fn validate_mount_host_rejects_empty() {
-        assert!(validate_mount_host("").is_err());
+        assert!(validate_mount_host("", MountKind::Bind).is_err());
+        assert!(validate_mount_host("", MountKind::Disk).is_err());
     }
 
     #[test]
@@ -919,7 +1339,7 @@ mod tests {
             "config.reference/workestrate.toml",
             "nested/state",
         ] {
-            validate_mount_host(ok)
+            validate_mount_host(ok, MountKind::Bind)
                 .unwrap_or_else(|e| panic!("legitimate host '{ok}' rejected: {e}"));
         }
     }
@@ -1149,6 +1569,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
         let roots = roots_for(&root, None, None);
         let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
@@ -1174,6 +1600,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
@@ -1254,6 +1686,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
@@ -1282,6 +1720,12 @@ mod tests {
             policy: None,
             owner: None,
             policy_file: None,
+
+            kind: MountKind::Bind,
+            quota_mib: None,
+            format: None,
+            fstype: None,
+            readonly: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
             source: Some("seed/s.json".into()),
