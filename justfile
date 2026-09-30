@@ -243,6 +243,130 @@ _golden-check-inner:
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
 
+# The config test fleet submodule (tests/fleets/workestrate-config-test) carries
+# one capsule per feature and its reviewed golden plan. This target compares
+# plans without starting guests.
+# Plans retain the explicit validation-host gate and its KVM prerequisite.
+# Verify the config test fleet capsules against their golden plan output.
+verify-config-test:
+    @just _verify-config-test-inner
+[private]
+_verify-config-test-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _fleet_dir=tests/fleets/workestrate-config-test
+    _fleet_name=workestrate-config-test
+    if [ ! -d "$_fleet_dir" ]; then
+        echo "FATAL: $_fleet_dir is missing; fetch the test fleet with 'git submodule update --init $_fleet_dir'" >&2
+        exit 1
+    fi
+    if [ "${WORKESTRATE_CONFIG_TEST_HOST:-}" != "1" ] || [ ! -e /dev/kvm ]; then
+        echo "FATAL: run config test fleet plan validation with WORKESTRATE_CONFIG_TEST_HOST=1 and /dev/kvm" >&2
+        exit 1
+    fi
+    # Capsules are enumerated from the fleet's content root, so a capsule added
+    # to the fleet is verified without editing this recipe. Directory mode
+    # declares one capsule per workestrate/workloads/<capsule>/workload.toml.
+    _capsules=()
+    for _workload in "$_fleet_dir"/workestrate/workloads/*/workload.toml; do
+        if [ -f "$_workload" ]; then
+            _capsules+=("$(basename "$(dirname "$_workload")")")
+        fi
+    done
+    if [ "${#_capsules[@]}" -eq 0 ]; then
+        echo "FATAL: no capsules found under $_fleet_dir/workestrate/workloads" >&2
+        exit 1
+    fi
+    # Each capsule is diffed against golden/<capsule>.plan.txt in the fleet
+    # checkout. A missing golden is a hard failure: a capsule that was never
+    # compared must not report success.
+    _missing=()
+    for name in "${_capsules[@]}"; do
+        if [ ! -s "$_fleet_dir/golden/$name.plan.txt" ]; then
+            _missing+=("$name")
+        fi
+    done
+    if [ "${#_missing[@]}" -ne 0 ]; then
+        echo "FATAL: missing golden plan for ${_missing[*]} under $_fleet_dir/golden" >&2
+        echo "generate them on a validation host, then commit them in the fleet repository:" >&2
+        echo "  WORKESTRATE_CONFIG_TEST_HOST=1 just config-test-golden-generate" >&2
+        exit 1
+    fi
+    # The fleet is directory mode, so WORKESTRATE_FLEET_DIR cannot select it
+    # (that override loads <dir>/workestrate.toml as a single file-mode layer).
+    # --fleet takes a registered NAME, so register the checkout as a local-path
+    # fleet in a throwaway config for this invocation only: the capsules always
+    # come from the submodule path, never from an environment override.
+    _config_dir="$(mktemp -d)"
+    trap 'rm -rf "$_config_dir"' EXIT
+    nix build --no-update-lock-file --out-link "$_config_dir/workestrate" .#workestrate
+    _fleet_path="$(cd "$_fleet_dir" && pwd)"
+    printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_config_dir/config.toml"
+    for name in "${_capsules[@]}"; do \
+        env -i HOME="$HOME" PATH="$PATH" LC_ALL=C \
+          "$_config_dir/workestrate/bin/workestrate" --config "$_config_dir" --no-project-config --fleet "$_fleet_name" workload plan "$name" \
+          | diff - "$_fleet_dir/golden/$name.plan.txt" \
+          || (echo "config test fleet plan mismatch for $name; refresh the capsule's golden plan with 'just config-test-golden-generate'" && exit 1); \
+    done
+
+# Regenerate the config test fleet's golden plans under
+# tests/fleets/workestrate-config-test/golden/. Same host gate as
+# `just verify-config-test`: the plans are captured on the validation host, and
+# the golden files are committed in the fleet repository, not in this one.
+config-test-golden-generate:
+    @just _config-test-golden-generate-inner
+[private]
+_config-test-golden-generate-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _fleet_dir=tests/fleets/workestrate-config-test
+    _fleet_name=workestrate-config-test
+    if [ ! -d "$_fleet_dir" ]; then
+        echo "FATAL: $_fleet_dir is missing; fetch the test fleet with 'git submodule update --init $_fleet_dir'" >&2
+        exit 1
+    fi
+    if [ "${WORKESTRATE_CONFIG_TEST_HOST:-}" != "1" ] || [ ! -e /dev/kvm ]; then
+        echo "FATAL: config test fleet golden plans are captured on a validation host; set WORKESTRATE_CONFIG_TEST_HOST=1 and provide /dev/kvm" >&2
+        exit 1
+    fi
+    # Capsules are enumerated from the fleet's content root, so a capsule added
+    # to the fleet is verified without editing this recipe. Directory mode
+    # declares one capsule per workestrate/workloads/<capsule>/workload.toml.
+    _capsules=()
+    for _workload in "$_fleet_dir"/workestrate/workloads/*/workload.toml; do
+        if [ -f "$_workload" ]; then
+            _capsules+=("$(basename "$(dirname "$_workload")")")
+        fi
+    done
+    if [ "${#_capsules[@]}" -eq 0 ]; then
+        echo "FATAL: no capsules found under $_fleet_dir/workestrate/workloads" >&2
+        exit 1
+    fi
+    # The fleet is directory mode, so WORKESTRATE_FLEET_DIR cannot select it
+    # (that override loads <dir>/workestrate.toml as a single file-mode layer).
+    # --fleet takes a registered NAME, so register the checkout as a local-path
+    # fleet in a throwaway config for this invocation only: the capsules always
+    # come from the submodule path, never from an environment override.
+    _tmp="$(mktemp -d)"
+    trap 'rm -rf "$_tmp"' EXIT
+    nix build --no-update-lock-file --out-link "$_tmp/workestrate" .#workestrate
+    _fleet_path="$(cd "$_fleet_dir" && pwd)"
+    printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_tmp/config.toml"
+    # Stage every plan before moving it into place: a capsule whose plan
+    # fails leaves the committed golden files untouched, and a new capsule
+    # cannot land a partial set of goldens.
+    mkdir -p "$_tmp/golden"
+    for name in "${_capsules[@]}"; do \
+        env -i HOME="$HOME" PATH="$PATH" LC_ALL=C \
+          "$_tmp/workestrate/bin/workestrate" --config "$_tmp" --no-project-config --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
+          || (echo "FATAL: workload plan failed for $name; no golden plan was written" >&2 && exit 1); \
+    done
+    mkdir -p "$_fleet_dir/golden"
+    for name in "${_capsules[@]}"; do
+        mv "$_tmp/golden/$name.plan.txt" "$_fleet_dir/golden/$name.plan.txt"
+    done
+    echo "wrote ${#_capsules[@]} golden plans to $_fleet_dir/golden; commit them in the fleet repository"
+
 # Regenerate the canonical JSON Schemas for workestrate.toml from the
 # schemars-derived ConfigFile, plus the bare-workload subschema derived from
 # WorkloadConfig, plus the config registry schema derived from Registry.
