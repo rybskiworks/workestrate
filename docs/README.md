@@ -51,6 +51,8 @@ checks.
 - [Development shells](nix/devshells.md) and [Nix purity](nix-purity.md): pinned
   environments and source/build separation.
 - [Test changes](testing.md): repository checks, regressions, and VM acceptance.
+- [Config test fleet](config-test-fleet.md): the host-gated E2E fleet for
+  pending configuration features.
 - [Agent test environment](agent-test-env.md): KVM, Lix, and verification containers.
 - [Presentation assets](assets/README.md): README artwork and editing conventions.
 

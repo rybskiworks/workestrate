@@ -243,6 +243,48 @@ _golden-check-inner:
           || (echo "golden mismatch for $name; run 'just golden-generate' to update" && exit 1); \
     done
 
+# STUB: the fleet submodule (tests/fleets/workestrate-config-test), the golden
+# files it is checked against and the CI wiring land with the fleet repository.
+# Capsules boot guests, so the gate needs WORKESTRATE_CONFIG_TEST_HOST=1 and
+# /dev/kvm on the host.
+# Verify the config test fleet capsules against their golden plan output.
+verify-config-test:
+    @just _verify-config-test-inner
+[private]
+_verify-config-test-inner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    _fleet_dir=tests/fleets/workestrate-config-test
+    if [ ! -d "$_fleet_dir" ]; then
+        echo "FATAL: $_fleet_dir is missing; fetch the test fleet with 'git submodule update --init $_fleet_dir'" >&2
+        exit 1
+    fi
+    if [ "${WORKESTRATE_CONFIG_TEST_HOST:-}" != "1" ] || [ ! -e /dev/kvm ]; then
+        echo "FATAL: config test fleet capsules boot guests; run on a validation host with WORKESTRATE_CONFIG_TEST_HOST=1 and /dev/kvm" >&2
+        exit 1
+    fi
+    if [ -z "${WORKESTRATE_DEVSHELL:-}" ]; then
+        if [ -n "${_WS_REENTERED:-}" ]; then echo "FATAL: devshell did not export WORKESTRATE_DEVSHELL; refusing re-exec loop" >&2; exit 1; fi
+        export _WS_REENTERED=1
+        # Pure-eval devenv root: override the flake's devenv-root placeholder
+        # input with a file holding this worktree's abs path (see `shell`).
+        _devenv_root_dir="$HOME/.cache/workestrate/devenv-root"
+        mkdir -p "$_devenv_root_dir"
+        _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+        _devenv_root_file="$_devenv_root_dir/$(printf '%s' "$_repo_root" | sha256sum | cut -c1-12)"
+        printf '%s' "$_repo_root" > "$_devenv_root_file"
+        exec nix develop --override-input devenv-root "file+file://$_devenv_root_file" -c just _verify-config-test-inner
+    fi
+    # Capsule list: grows with the fleet repository. Each capsule's golden
+    # plan is golden/<capsule>.plan.txt inside the fleet checkout.
+    _capsules=(box-smoke disk-attach)
+    for name in "${_capsules[@]}"; do \
+        env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_NO_PROJECT_CONFIG \
+          WORKESTRATE_FLEET_DIR="$_fleet_dir" cargo run --manifest-path control/agentctl/Cargo.toml -- workload plan "$name" \
+          | diff - "$_fleet_dir/golden/$name.plan.txt" \
+          || (echo "config test fleet plan mismatch for $name; refresh the capsule's golden plan" && exit 1); \
+    done
+
 # Regenerate the canonical JSON Schemas for workestrate.toml from the
 # schemars-derived ConfigFile, plus the bare-workload subschema derived from
 # WorkloadConfig, plus the config registry schema derived from Registry.
