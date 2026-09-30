@@ -1053,10 +1053,10 @@ mod tests {
         let mut row = bind_row("missing/evidence.qcow2", "/mnt/img", MountMode::Rw);
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row]);
-        let err = ensure_mount_sources(&roots_for(&root, None, None), &plan).unwrap_err();
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
         assert!(
-            err.to_string().contains("never auto-created"),
-            "disk sources must never be auto-created: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("never auto-created")),
+            "disk sources must never be auto-created: got {result:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -1082,10 +1082,10 @@ mod tests {
         let mut row = bind_row("notanimage", "/mnt/img", MountMode::Rw);
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row]);
-        let err = ensure_mount_sources(&roots_for(&root, None, None), &plan).unwrap_err();
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
         assert!(
-            err.to_string().contains("neither a regular image file"),
-            "a directory is not a disk source: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("neither a regular image file")),
+            "a directory is not a disk source: got {result:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -1115,10 +1115,10 @@ mod tests {
         let mut row = bind_row(&host, "/mnt/dev", MountMode::Rw);
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row]);
-        let err = ensure_mount_sources(&roots_for(&root, None, None), &plan).unwrap_err();
+        let result = ensure_mount_sources(&roots_for(&root, None, None), &plan);
         assert!(
-            err.to_string().contains("NOT on the operator allowlist"),
-            "an existing block device outside the allowlist must fail closed: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("NOT on the operator allowlist")),
+            "an existing block device outside the allowlist must fail closed: got {result:?}"
         );
         // SAFETY: per-test var; removed before test end.
         unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
@@ -1165,7 +1165,7 @@ mod tests {
         let mut row = bind_row("missing/evidence.qcow2", "/mnt/img", MountMode::Rw);
         row.kind = MountKind::Disk;
         let plan = minimal_plan(vec![row]);
-        let err = preflight_existence(
+        let result = preflight_existence(
             &roots_for(&root, None, None),
             &plan,
             &[],
@@ -1173,11 +1173,10 @@ mod tests {
             None,
             "svc",
             true,
-        )
-        .unwrap_err();
+        );
         assert!(
-            err.to_string().contains("never auto-created"),
-            "hard: {err}"
+            matches!(&result, Err(e) if e.to_string().contains("never auto-created")),
+            "hard: got {result:?}"
         );
         let warnings = preflight_existence(
             &roots_for(&root, None, None),
@@ -1297,17 +1296,17 @@ mod tests {
             "var/../../etc",
             "agents/pi/../../../etc",
         ] {
-            let err = validate_mount_host(hostile, MountKind::Bind).unwrap_err();
+            let result = validate_mount_host(hostile, MountKind::Bind);
             assert!(
-                err.to_string().contains(".."),
-                "hostile='{hostile}' should be rejected for traversal; got: {err}"
+                matches!(&result, Err(e) if e.to_string().contains("..")),
+                "hostile='{hostile}' should be rejected for traversal; got {result:?}"
             );
             // Traversal is rejected for disk rows too (no path shape escapes
             // the mount-root / allowlist discipline).
-            let err = validate_mount_host(hostile, MountKind::Disk).unwrap_err();
+            let result = validate_mount_host(hostile, MountKind::Disk);
             assert!(
-                err.to_string().contains(".."),
-                "hostile='{hostile}' should be rejected for traversal; got: {err}"
+                matches!(&result, Err(e) if e.to_string().contains("..")),
+                "hostile='{hostile}' should be rejected for traversal; got {result:?}"
             );
         }
     }
