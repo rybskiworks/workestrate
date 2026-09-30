@@ -1311,6 +1311,7 @@ pub(crate) mod tests {
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             },
             crate::microsandbox::plan::MountPlan {
                 host: "second".to_string(),
@@ -1325,6 +1326,7 @@ pub(crate) mod tests {
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             },
         ];
         let err = validate_config(&config).unwrap_err().to_string();
@@ -1349,6 +1351,7 @@ pub(crate) mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }];
         let err = validate_config(&config).unwrap_err().to_string();
         assert!(
@@ -2134,6 +2137,7 @@ egress = "deny"
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             }];
             svc.seed_files[0].target = "work/x.json".to_string();
         }
@@ -2164,6 +2168,7 @@ egress = "deny"
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             }];
             svc.seed_files[0].target = "workloads/svc/config/app.json".to_string();
         }
@@ -2190,6 +2195,7 @@ egress = "deny"
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             }];
         }
         let err = validate_config(&config).unwrap_err().to_string();
@@ -2219,6 +2225,7 @@ egress = "deny"
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             }];
             svc.seed_files[0].target = "workspaces/svc-state/x.json".to_string();
         }
@@ -2431,6 +2438,7 @@ egress = "deny"
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         };
         let json = serde_json::to_value(&mount).unwrap();
         assert_eq!(json["mode"], serde_json::json!("ro"));

@@ -256,12 +256,13 @@ fn configure_bind_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
 }
 
 /// Wire one `kind = "disk"` mount into the SDK builder as a virtio-blk
-/// attachment: `v.disk(host).format(f).fstype(opt).readonly(...)` (issue
-/// #109). Optional `format`/`fstype` map to SDK overrides; when absent the
-/// SDK infers the format from the host extension and lets agentd probe the
+/// attachment: `v.disk(host).format(f).fstype(opt).attach_only().readonly(...)`
+/// (issue #109). Optional `format`/`fstype` map to SDK overrides; when absent
+/// the SDK infers the format from the host extension and lets agentd probe the
 /// guest filesystem. Read-only follows [`MountPlan::is_read_only`] (device
-/// sources default read-only). Bind-only options (owner, quota, policy) are
-/// intentionally never applied here.
+/// sources default read-only) and attach-only follows
+/// [`MountPlan::is_attach_only`] (default: mount after boot). Bind-only
+/// options (owner, quota, policy) are intentionally never applied here.
 fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountBuilder {
     let v = v.disk(host);
     let v = match m.format {
@@ -272,6 +273,17 @@ fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
         Some(fstype) => v.fstype(fstype.clone()),
         None => v,
     };
+    // An attach-only row leaves the device to the guest: agentd's bootstrap
+    // mount list omits the disk, so an unmountable container (crypto_LUKS)
+    // cannot abort the boot. The guest finds the device at
+    // /dev/disk/by-id/virtio-<id> or as the next free /dev/vdX.
+    //
+    // PIN DEPENDENCY: `MountBuilder::attach_only()` exists only on the
+    // microsandbox branch feat/attach-only-disk. It arrives with the pin move
+    // (`just sdk-prepare` re-vendors control/agentctl/vendor/microsandbox-fork
+    // from the merged fork), and until then this call does not compile.
+    // Nothing else on the mount path needs the fork.
+    let v = if m.is_attach_only() { v.attach_only() } else { v };
     if m.is_read_only() { v.readonly() } else { v }
 }
 
@@ -849,6 +861,7 @@ mod tests {
                     format: None,
                     fstype: None,
                     readonly: None,
+                    attach_only: None,
                 };
                 let built =
                     super::configure_bind_mount(MountBuilder::new("/data"), source.clone(), &row)
@@ -903,6 +916,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -937,6 +951,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
 
         let result =
@@ -966,6 +981,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }
     }
 
@@ -1022,6 +1038,46 @@ mod tests {
         assert!(
             options.readonly,
             "explicit readonly=true must reach the SDK"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mount_attach_only_threads_through_to_sdk() -> anyhow::Result<()> {
+        // The canonical row's flag reaches the SDK builder's disk path; the
+        // undeclared default keeps the historical mount-after-boot behavior.
+        // Compiling this test needs the vendored fork pin that carries
+        // `MountBuilder::attach_only()` and the `attach_only` variant field
+        // (see the pin note on `configure_disk_mount`).
+        use microsandbox::sandbox::{MountBuilder, VolumeMount};
+        let mut row = bind_row("/dev/wk-attach-only", "/mnt/q", MountMode::Rw);
+        row.kind = MountKind::Disk;
+        row.attach_only = Some(true);
+        let built = super::configure_disk_mount(
+            MountBuilder::new("/mnt/q"),
+            "/dev/wk-attach-only".into(),
+            &row,
+        )
+        .build()?;
+        let VolumeMount::DiskImage { attach_only, .. } = built else {
+            panic!("expected disk image mount");
+        };
+        assert!(attach_only, "declared attach_only must reach the SDK");
+
+        let mut plain = bind_row("/dev/wk-attach-only", "/mnt/q", MountMode::Rw);
+        plain.kind = MountKind::Disk;
+        let built = super::configure_disk_mount(
+            MountBuilder::new("/mnt/q"),
+            "/dev/wk-attach-only".into(),
+            &plain,
+        )
+        .build()?;
+        let VolumeMount::DiskImage { attach_only, .. } = built else {
+            panic!("expected disk image mount");
+        };
+        assert!(
+            !attach_only,
+            "unset attach_only must keep the boot-time mount"
         );
         Ok(())
     }
@@ -1567,6 +1623,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
@@ -1598,6 +1655,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
@@ -1684,6 +1742,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
@@ -1718,6 +1777,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
             source: Some("seed/s.json".into()),

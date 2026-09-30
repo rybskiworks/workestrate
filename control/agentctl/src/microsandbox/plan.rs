@@ -361,8 +361,15 @@ pub struct MountPlan {
     /// canonical row (and its serialized plan JSON and provenance hash)
     /// always carries the access the runtime will enforce.
     pub readonly: Option<bool>,
-    // NOTE: `attach_only` is deliberately absent — see the note on
-    // [`MountPlanWire`] for the vendored-fork ordering.
+    /// Attach-only flag for `kind = "disk"` rows: the device is attached as a
+    /// virtio-blk device but left OUT of the agentd bootstrap mount list, so
+    /// the guest kernel never mounts it (required for a `crypto_LUKS`
+    /// container, which the kernel cannot mount and agentd cannot open).
+    /// Unset = `false` = the disk is mounted at `guest` as before. Parsing
+    /// canonicalizes a non-deviating `Some(false)` to `None` so the canonical
+    /// row, its plan JSON and its provenance hash carry the flag only when it
+    /// actually changes the runtime; see [`MountPlan::is_attach_only`].
+    pub attach_only: Option<bool>,
 }
 
 impl MountPlan {
@@ -386,6 +393,17 @@ impl MountPlan {
             }),
         }
     }
+
+    /// Canonical internal accessor: `true` iff the attachment skips the
+    /// agentd bootstrap mount and leaves the device to the guest. Sibling of
+    /// [`MountPlan::is_read_only`]: plan display, serialized JSON, the
+    /// provenance hash and the SDK wiring all read the same effective value
+    /// (`attach_only.unwrap_or(false)`), so a declared `false` is
+    /// indistinguishable from an undeclared flag by design. Always `false` for
+    /// `kind = "bind"` rows (the field is rejected at parse time).
+    pub fn is_attach_only(&self) -> bool {
+        self.attach_only.unwrap_or(false)
+    }
 }
 
 /// Serde wire shape for [`MountPlan`]: both `mode` and the deprecated
@@ -397,15 +415,16 @@ impl MountPlan {
 /// removed sugar words (`mask`/`unmask`/`protect`/`writes_deny`) hard parse
 /// errors rather than silently ignored keys.
 ///
-/// NOTE — `attach_only` is deliberately NOT a field yet. Workestrate vendors
-/// the microsandbox fork at control/agentctl/vendor/microsandbox-fork
-/// (patched by .cargo/config.toml path patches, prepared by `just
-/// sdk-prepare`), and the fork's `.attach_only()` disk option only exists on
-/// the unmerged msb branch feat/attach-only-disk — a wire field here cannot
-/// compile until that branch merges and the vendored pin is bumped. Until
-/// then every disk row is mounted during agentd boot. When the fork catches
-/// up: add the wire field here, thread it through `TryFrom` (conflict checks
-/// against `readonly`) and `configure_disk_mount` (mounts.rs).
+/// PIN DEPENDENCY — this field, and the `MountBuilder::attach_only()` call it
+/// feeds in `mounts.rs`, exist only on the microsandbox branch
+/// feat/attach-only-disk. Workestrate vendors that fork at
+/// control/agentctl/vendor/microsandbox-fork (patched by .cargo/config.toml
+/// path patches, prepared by `just sdk-prepare`), so THIS BRANCH DOES NOT
+/// COMPILE until that branch merges and the vendored pin moves: the vendored
+/// `MountBuilder` has no `.attach_only()` yet. Nothing else here is blocked —
+/// the wire shape, the parse-time validation, the plan display and the
+/// provenance row are plain agentctl code. Until the pin moves, no config may
+/// declare `attach_only` and every disk row is mounted during agentd boot.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -432,6 +451,14 @@ struct MountPlanWire {
     /// `mode`. Parsing folds the effective value into the canonical row.
     #[serde(default)]
     readonly: Option<bool>,
+    /// Attach-only flag (disk rows only). Set = the device is attached as a
+    /// virtio-blk device but left out of the agentd bootstrap mount list, so
+    /// the guest kernel never mounts it (a `crypto_LUKS` container would
+    /// otherwise abort the boot). Unset (the default) = the disk is mounted at
+    /// `guest` as before; an explicit `false` is canonicalized to unset, so a
+    /// plan without a deviating flag keeps its bytes and provenance hash.
+    #[serde(default)]
+    attach_only: Option<bool>,
     /// DEPRECATED alias for `mode` (`true` ≡ "ro", `false` ≡ "rw"); accepted
     /// at parse time with a deprecation warning, never serialized.
     #[serde(default)]
@@ -489,12 +516,15 @@ impl TryFrom<MountPlanWire> for MountPlan {
         // row) — a silently ignored field would violate the fail-closed
         // posture for device attachments.
         if kind == MountKind::Bind
-            && (wire.format.is_some() || wire.fstype.is_some() || wire.readonly.is_some())
+            && (wire.format.is_some()
+                || wire.fstype.is_some()
+                || wire.readonly.is_some()
+                || wire.attach_only.is_some())
         {
             return Err(format!(
                 "mount '{}' is kind = \"bind\" but declares disk-only field(s) \
-                 (format/fstype/readonly); declare kind = \"disk\" for disk/device \
-                 attachments",
+                 (format/fstype/readonly/attach_only); declare kind = \"disk\" for \
+                 disk/device attachments",
                 wire.host
             ));
         }
@@ -575,6 +605,18 @@ impl TryFrom<MountPlanWire> for MountPlan {
             ),
             (_, readonly) => readonly,
         };
+        // `attach_only` has no conflict partner and no source-derived default:
+        // its effective value is `attach_only.unwrap_or(false)`, which is what
+        // [`MountPlan::is_attach_only`] reads. Only a declared `true` deviates,
+        // so a declared `false` is canonicalized to unset — the canonical row,
+        // its plan JSON, the plan display and the provenance hash then state
+        // the flag exactly when it changes the runtime, and a plan that never
+        // declared it keeps its bytes and its hash. A bind row never reaches
+        // here (rejected above).
+        let attach_only = match wire.attach_only {
+            Some(true) => Some(true),
+            Some(false) | None => None,
+        };
         // Mount-policy sugar normalization: `read`/`write` sub-tables on the
         // row concatenate INTO the mount's `policy` fragment (AFTER any
         // explicitly-declared `policy` table entries; both forms may mix).
@@ -609,6 +651,7 @@ impl TryFrom<MountPlanWire> for MountPlan {
             format: wire.format,
             fstype: wire.fstype,
             readonly,
+            attach_only,
         })
     }
 }
@@ -635,8 +678,10 @@ impl Serialize for MountPlan {
         // fields are emitted only when they deviate from the defaults (`kind`
         // bind, `quota_mib`/`format`/`fstype` unset) — except `readonly`, which
         // parsing folds to the EFFECTIVE disk access, so every disk plan JSON
-        // states the read-only state the runtime will enforce. All-bind legacy
-        // plans keep the pre-#109 bytes.
+        // states the read-only state the runtime will enforce. `attach_only`
+        // is emitted only when it deviates (`is_attach_only()`), so a disk row
+        // that mounts normally keeps the bytes of a plan that never mentions
+        // the flag. All-bind legacy plans keep the pre-#109 bytes.
         let mut n = 3;
         if self.owner.is_some() {
             n += 1;
@@ -660,6 +705,9 @@ impl Serialize for MountPlan {
             n += 1;
         }
         if self.readonly.is_some() {
+            n += 1;
+        }
+        if self.is_attach_only() {
             n += 1;
         }
         let mut s = serializer.serialize_struct("MountPlan", n)?;
@@ -690,6 +738,9 @@ impl Serialize for MountPlan {
         if let Some(readonly) = &self.readonly {
             s.serialize_field("readonly", readonly)?;
         }
+        if self.is_attach_only() {
+            s.serialize_field("attach_only", &true)?;
+        }
         s.end()
     }
 }
@@ -712,9 +763,11 @@ impl schemars::JsonSchema for MountPlan {
                  is a deprecated parse-time alias (normalized into `mode`, never \
                  serialized). `kind` (default \"bind\") selects a virtiofs bind or a \
                  virtio-blk disk/device attachment; `quota_mib` sets the bind \
-                 guest-write budget; `format`/`fstype`/`readonly` apply to \
-                 `kind = \"disk\"` rows (allowlisted device sources default \
-                 read-only). `read`/`write` are parse-time mount-policy sugar in the \
+                 guest-write budget; `format`/`fstype`/`readonly`/`attach_only` \
+                 apply to `kind = \"disk\"` rows (allowlisted device sources \
+                 default read-only; `attach_only` attaches the device without \
+                 mounting it in the guest). `read`/`write` are parse-time \
+                 mount-policy sugar in the \
                  `[policy.mounts]` axis shapes, normalized into the row's `policy` \
                  fragment (never serialized)."
                     .to_string(),
@@ -1137,6 +1190,12 @@ impl fmt::Display for SandboxPlan {
                     if let Some(readonly) = m.readonly {
                         writeln!(f, "  readonly: {}", readonly)?;
                     }
+                    // Only a deviating flag is rendered (same shape as the
+                    // other disk sub-lines), so a disk row that mounts
+                    // normally keeps the historical plan text.
+                    if m.is_attach_only() {
+                        writeln!(f, "  attach_only: true")?;
+                    }
                 }
             }
             if let Some(owner) = m.owner {
@@ -1456,6 +1515,7 @@ mod tests {
                     format: None,
                     fstype: None,
                     readonly: None,
+                    attach_only: None,
                 },
                 MountPlan {
                     host: "/cfg".to_string(),
@@ -1470,6 +1530,7 @@ mod tests {
                     format: None,
                     fstype: None,
                     readonly: None,
+                    attach_only: None,
                 },
             ],
             network: NetworkPlan {
@@ -1656,6 +1717,72 @@ network: egress_default=deny ingress_default=deny
         assert!(result.is_err(), "readonly=true + mode=rw must fail closed");
     }
 
+    // ---- Issue #109 follow-up: attach-only disk attachments ----
+
+    #[test]
+    fn mount_row_attach_only_defaults_absent() -> anyhow::Result<()> {
+        // Undeclared and explicitly `false` are the SAME canonical row: the
+        // effective default is "attach, then mount at boot", so neither the
+        // body nor the plan JSON carries the flag.
+        let absent = parse_row(r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk"}"#);
+        assert_eq!(absent.attach_only, None);
+        assert!(!absent.is_attach_only());
+        let declared_false = parse_row(
+            r#"{"host":"srv/evidence.qcow2","guest":"/mnt/img","kind":"disk","attach_only":false}"#,
+        );
+        assert_eq!(
+            declared_false.attach_only, None,
+            "a non-deviating declaration is canonicalized away"
+        );
+        assert_eq!(
+            declared_false, absent,
+            "attach_only = false must equal the undeclared row"
+        );
+        let json = serde_json::to_string(&absent)?;
+        assert!(!json.contains("attach_only"), "json: {json}");
+        assert_eq!(
+            serde_json::to_string(&declared_false)?,
+            json,
+            "the flag is skipped when it does not deviate"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mount_row_disk_attach_only_parsed_and_serialized() -> anyhow::Result<()> {
+        // A declared flag is retained in the canonical row, reaches
+        // `is_attach_only()` and is serialized with the rest of the row.
+        let row = parse_row(
+            r#"{"host":"srv/luks.img","guest":"/mnt/q","kind":"disk","format":"raw","attach_only":true}"#,
+        );
+        assert_eq!(row.attach_only, Some(true));
+        assert!(row.is_attach_only());
+        assert_eq!(row.readonly, Some(false), "unrelated access fields are untouched");
+        let json = serde_json::to_string(&row)?;
+        assert!(json.contains(r#""attach_only":true"#), "json: {json}");
+        let again: MountPlan = serde_json::from_str(&json)?;
+        assert_eq!(again, row, "the canonical row round-trips stably");
+        Ok(())
+    }
+
+    #[test]
+    fn mount_row_attach_only_on_a_bind_fails_closed() {
+        // Only `kind = "disk"` may declare the flag: on a bind row the bind
+        // path would silently drop it, so it is a hard parse error that names
+        // the field.
+        let result = serde_json::from_str::<MountPlan>(
+            r#"{"host":"data","guest":"/data","attach_only":true}"#,
+        );
+        let err = match result {
+            Ok(row) => panic!("attach_only on a bind row must fail closed, got {row:?}"),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            err.contains("attach_only"),
+            "the error must name the field: {err}"
+        );
+    }
+
     #[test]
     fn mount_row_serialize_keeps_legacy_bind_byte_identical() -> anyhow::Result<()> {
         let row = parse_row(r#"{"host":"cfg/app.yaml","guest":"/app/cfg","mode":"ro"}"#);
@@ -1726,6 +1853,7 @@ network: egress_default=deny ingress_default=deny
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         };
         bind.quota_mib = Some(512);
         let mut disk = MountPlan {
@@ -1741,10 +1869,15 @@ network: egress_default=deny ingress_default=deny
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         };
         disk.kind = MountKind::Disk;
         disk.format = Some(DiskFormat::Raw);
         disk.fstype = Some("ext4".into());
+        // A copy that declares the flag renders the extra sub-line; the plain
+        // copy must not (only a deviating flag is shown).
+        let mut attach_only_disk = disk.clone();
+        attach_only_disk.attach_only = Some(true);
         plan.mounts = vec![bind, disk];
         let rendered = format!("{plan}");
         assert!(
@@ -1762,6 +1895,16 @@ network: egress_default=deny ingress_default=deny
         assert!(
             rendered.contains("  fstype: ext4"),
             "fstype must render: {rendered}"
+        );
+        assert!(
+            !rendered.contains("attach_only"),
+            "a disk that mounts normally must not render the flag: {rendered}"
+        );
+        plan.mounts = vec![attach_only_disk];
+        let rendered = format!("{plan}");
+        assert!(
+            rendered.contains("  attach_only: true"),
+            "attach_only must render on the disk row: {rendered}"
         );
         // SAFETY: per-test var; removed before test end.
         unsafe { std::env::remove_var("WORKESTRATE_ALLOWED_DEVICES") };
