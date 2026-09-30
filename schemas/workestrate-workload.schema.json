@@ -1150,13 +1150,21 @@
       "additionalProperties": false
     },
     "MountPlan": {
-      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `kind` (default \"bind\") selects a virtiofs bind or a virtio-blk disk/device attachment; `quota_mib` sets the bind guest-write budget; `format`/`fstype`/`readonly` apply to `kind = \"disk\"` rows (allowlisted device sources default read-only). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
+      "description": "A mount row (`[[mounts]]` / `[[workloads.<name>.mounts]]`). Canonical field: `mode` (\"ro\" | \"rw\", default \"rw\"); `read_only = <bool>` is a deprecated parse-time alias (normalized into `mode`, never serialized). `kind` (default \"bind\") selects a virtiofs bind or a virtio-blk disk/device attachment; `quota_mib` sets the bind guest-write budget; `format`/`fstype`/`readonly`/`attach_only` apply to `kind = \"disk\"` rows (allowlisted device sources default read-only; `attach_only` attaches the device without an automatic agentd mount). `read`/`write` are parse-time mount-policy sugar in the `[policy.mounts]` axis shapes, normalized into the row's `policy` fragment (never serialized).",
       "type": "object",
       "required": [
         "guest",
         "host"
       ],
       "properties": {
+        "attach_only": {
+          "description": "Attach-only flag (disk rows only). True attaches the virtio-blk device without an automatic agentd mount, allowing explicit guest inspection or unlocking. Unset (the default) = the disk is mounted at `guest` as before; an explicit `false` is canonicalized to unset, so a plan without a deviating flag keeps its bytes and provenance hash.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "format": {
           "description": "Disk image format (disk rows only); unset infers from the extension.",
           "default": null,

@@ -310,6 +310,23 @@ fn canonical_plan_bytes(plan: &SandboxPlan) -> String {
         s.push(REC);
     }
 
+    // Issue #109 follow-up: `attach_only` is hashed only when a row actually
+    // deviates (the effective default is `false`; a declared `false` is
+    // canonicalized away at parse time — see plan.rs), so a plan whose disks
+    // are all mounted normally keeps its pre-change hash byte-for-byte. The
+    // group is index-addressed, mirroring `mount_owners` below, so the
+    // declaring row is unambiguous.
+    if plan.mounts.iter().any(|m| m.is_attach_only()) {
+        s.push_str("mount_attach_only");
+        for (index, mount) in plan.mounts.iter().enumerate() {
+            if mount.is_attach_only() {
+                s.push(UNIT);
+                s.push_str(&format!("{index}:1"));
+            }
+        }
+        s.push(REC);
+    }
+
     // Guest owners are appended only when declared, preserving old hashes.
     if plan.mounts.iter().any(|m| m.owner.is_some()) {
         s.push_str("mount_owners");
@@ -639,6 +656,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }
     }
 
@@ -821,6 +839,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }];
         let mut untokened = empty_plan();
         untokened.mounts = vec![mount("/data", "/mnt", MountMode::Rw)];
@@ -1081,6 +1100,27 @@ mod tests {
         assert!(
             canonical_plan_bytes(&allowed).contains("ro=1"),
             "allowlisted device fold must hash ro=1"
+        );
+
+        // Issue #109 follow-up: `attach_only` skews the hash exactly when it
+        // deviates, and a disk plan that mounts normally keeps the hash of the
+        // identical plan without the flag.
+        let plain_disk = plan_for(device_json)?;
+        let plain_disk_hash = config_hash_of_plan(&plain_disk);
+        let mut attach_plan = plan_for(device_json)?;
+        attach_plan.mounts[0].attach_only = Some(true);
+        assert_ne!(
+            config_hash_of_plan(&attach_plan),
+            plain_disk_hash,
+            "attach-only edit must skew the provenance hash"
+        );
+        assert!(
+            canonical_plan_bytes(&attach_plan).contains("mount_attach_only"),
+            "a deviating attach_only must hash its own group"
+        );
+        assert!(
+            !canonical_plan_bytes(&plain_disk).contains("mount_attach_only"),
+            "a disk that mounts normally must not carry the attach_only group"
         );
 
         // Network edits → DIFFERENT.

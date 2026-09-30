@@ -2594,6 +2594,7 @@ mod tests {
                 format: None,
                 fstype: None,
                 readonly: None,
+                attach_only: None,
             }];
             p.ports = vec![PortMapping::new(4000, 4000)];
             p

@@ -256,12 +256,13 @@ fn configure_bind_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
 }
 
 /// Wire one `kind = "disk"` mount into the SDK builder as a virtio-blk
-/// attachment: `v.disk(host).format(f).fstype(opt).readonly(...)` (issue
-/// #109). Optional `format`/`fstype` map to SDK overrides; when absent the
-/// SDK infers the format from the host extension and lets agentd probe the
+/// attachment: `v.disk(host).format(f).fstype(opt).attach_only().readonly(...)`
+/// (issue #109). Optional `format`/`fstype` map to SDK overrides; when absent
+/// the SDK infers the format from the host extension and lets agentd probe the
 /// guest filesystem. Read-only follows [`MountPlan::is_read_only`] (device
-/// sources default read-only). Bind-only options (owner, quota, policy) are
-/// intentionally never applied here.
+/// sources default read-only) and attach-only follows
+/// [`MountPlan::is_attach_only`] (default: mount after boot). Bind-only
+/// options (owner, quota, policy) are intentionally never applied here.
 fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountBuilder {
     let v = v.disk(host);
     let v = match m.format {
@@ -271,6 +272,15 @@ fn configure_disk_mount(v: MountBuilder, host: PathBuf, m: &MountPlan) -> MountB
     let v = match &m.fstype {
         Some(fstype) => v.fstype(fstype.clone()),
         None => v,
+    };
+    // Leave attach-only disks out of agentd's bootstrap mount list. The guest
+    // can inspect or unlock the device explicitly without an automatic mount.
+    // Device naming depends on guest support; identify the attached virtio
+    // disk by its metadata instead of assuming a fixed /dev/vdX.
+    let v = if m.is_attach_only() {
+        v.attach_only()
+    } else {
+        v
     };
     if m.is_read_only() { v.readonly() } else { v }
 }
@@ -850,6 +860,7 @@ mod tests {
                     format: None,
                     fstype: None,
                     readonly: None,
+                    attach_only: None,
                 };
                 let built =
                     super::configure_bind_mount(MountBuilder::new("/data"), source.clone(), &row)
@@ -904,6 +915,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
 
         ensure_mount_sources(&roots_for(&root, None, Some("agents/test/build")), &plan)?;
@@ -938,6 +950,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
 
         let result =
@@ -967,6 +980,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }
     }
 
@@ -1024,6 +1038,35 @@ mod tests {
             options.readonly,
             "explicit readonly=true must reach the SDK"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn disk_mount_attach_only_threads_through_to_sdk() -> anyhow::Result<()> {
+        use microsandbox::sandbox::{MountBuilder, VolumeMount};
+        for attach_only in [false, true] {
+            for readonly in [false, true] {
+                let mut row = bind_row("fixture.raw", "/mnt/q", MountMode::Rw);
+                row.kind = MountKind::Disk;
+                row.attach_only = Some(attach_only);
+                row.readonly = Some(readonly);
+                row.resolve_disk_access();
+                let built = super::configure_disk_mount(
+                    MountBuilder::new("/mnt/q"),
+                    "fixture.raw".into(),
+                    &row,
+                )
+                .build()?;
+                assert!(matches!(
+                    built,
+                    VolumeMount::DiskImage {
+                        attach_only: actual_attach_only,
+                        options,
+                        ..
+                    } if actual_attach_only == attach_only && options.readonly == readonly
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1575,6 +1618,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let err = preflight_existence(&roots, &plan, &[], None, None, "svc", true).unwrap_err();
@@ -1606,6 +1650,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", true)?;
@@ -1692,6 +1737,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let roots = roots_for(&root, None, None);
         let warnings = preflight_existence(&roots, &plan, &[], None, None, "svc", false)?;
@@ -1726,6 +1772,7 @@ mod tests {
             format: None,
             fstype: None,
             readonly: None,
+            attach_only: None,
         }]);
         let seeds = vec![crate::config::SeedFileConfig {
             source: Some("seed/s.json".into()),
