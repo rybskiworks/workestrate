@@ -124,7 +124,7 @@ pub(crate) fn instance_scoped_state_path(path: &str, workload: &str, key: Option
 /// Validate a mount host string as it appears in the raw config TOML
 /// (before `${CWD}` / `${WORKESTRATE_<NAME>_BUILD}` template substitution).
 ///
-/// Rules (closes review finding A2; issue #109 adds the disk axis):
+/// Rules (issue #109 adds the disk axis):
 /// 1. Reject empty strings.
 /// 2. Reject absolute paths (leading `/`) for `kind = "bind"` rows. Config
 ///    authors must use a template prefix (`${CWD}/...`, `${MSB_HOME}/...`) or
