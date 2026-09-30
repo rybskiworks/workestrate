@@ -6,6 +6,10 @@ behaves as declared. It is a separate repository, used by development and
 validation tooling only. User workloads never reference it. The fleet exists
 to hold the fixtures that only make sense while a feature is landing.
 
+The targets in this repository compare workload plans only. They do not start
+the capsules or run their assertions. Runtime acceptance requires the separate
+launch, assertion, and teardown procedure in the fleet's `README.agents.md`.
+
 The checkout lives at `tests/fleets/workestrate-config-test` as a submodule of
 this repository, pinned DETACHED at the commit the superproject records (the
 gitlink records one commit, `e26fade`; `git submodule status` prints the live
@@ -66,6 +70,8 @@ change the fleet that `workload` commands read.
 The `just` targets below register nothing in the operator's config: they write a
 local-path fleet entry into a throwaway config directory for the invocation, so
 a validation host needs no `fleet add` and leaves no registry entry behind.
+Both targets disable project configuration and ignore caller configuration-ref
+and runtime-state directory overrides.
 
 ## Run the gate
 
@@ -134,7 +140,7 @@ repository convention that agent repositories are flake inputs, not submodules
 (ADR 0001, kept as history), so that decision comes before this shape is final.
 
 The recipe fails fast when `tests/fleets/workestrate-config-test` is absent or a
-capsule has no golden plan, and it runs the capsules only on a host that sets
+capsule has no golden plan, and it compares plans only on a host that sets
 `WORKESTRATE_CONFIG_TEST_HOST=1` and provides `/dev/kvm`.
 
 ## Where to read more

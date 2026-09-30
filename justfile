@@ -245,8 +245,8 @@ _golden-check-inner:
 
 # The config test fleet submodule (tests/fleets/workestrate-config-test) carries
 # one capsule per feature; the golden plan files and the CI wiring still land
-# with the fleet repository. Capsules boot guests, so the gate needs
-# WORKESTRATE_CONFIG_TEST_HOST=1 and /dev/kvm on the host.
+# with the fleet repository. This target compares plans without starting guests.
+# Plans retain the explicit validation-host gate and its KVM prerequisite.
 # Verify the config test fleet capsules against their golden plan output.
 verify-config-test:
     @just _verify-config-test-inner
@@ -261,7 +261,7 @@ _verify-config-test-inner:
         exit 1
     fi
     if [ "${WORKESTRATE_CONFIG_TEST_HOST:-}" != "1" ] || [ ! -e /dev/kvm ]; then
-        echo "FATAL: config test fleet capsules boot guests; run on a validation host with WORKESTRATE_CONFIG_TEST_HOST=1 and /dev/kvm" >&2
+        echo "FATAL: run config test fleet plan validation with WORKESTRATE_CONFIG_TEST_HOST=1 and /dev/kvm" >&2
         exit 1
     fi
     # Capsules are enumerated from the fleet's content root, so a capsule added
@@ -315,7 +315,8 @@ _verify-config-test-inner:
     printf '[fleets.%s]\nurl = "%s"\nsecrets = "none"\n' "$_fleet_name" "$_fleet_path" > "$_config_dir/config.toml"
     for name in "${_capsules[@]}"; do \
         env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
-          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_config_dir" --fleet "$_fleet_name" workload plan "$name" \
+          -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR \
+          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_config_dir" --no-project-config --fleet "$_fleet_name" workload plan "$name" \
           | diff - "$_fleet_dir/golden/$name.plan.txt" \
           || (echo "config test fleet plan mismatch for $name; refresh the capsule's golden plan with 'just config-test-golden-generate'" && exit 1); \
     done
@@ -380,7 +381,8 @@ _config-test-golden-generate-inner:
     mkdir -p "$_tmp/golden"
     for name in "${_capsules[@]}"; do \
         env -u WORKESTRATE_CONFIG -u WORKESTRATE_FLEET -u WORKESTRATE_FLEET_DIR -u WORKESTRATE_NO_PROJECT_CONFIG \
-          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_tmp" --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
+          -u WORKESTRATE_CONFIG_REF -u WORKESTRATE_STATE_DIR \
+          cargo run --manifest-path control/agentctl/Cargo.toml -- --config "$_tmp" --no-project-config --fleet "$_fleet_name" workload plan "$name" > "$_tmp/golden/$name.plan.txt" \
           || (echo "FATAL: workload plan failed for $name; no golden plan was written" >&2 && exit 1); \
     done
     mkdir -p "$_fleet_dir/golden"
