@@ -2031,6 +2031,61 @@ egress = "deny"
         Ok(())
     }
 
+    #[test]
+    fn prepare_isolates_namespaced_instance_seeds_and_preserves_existing_state() -> Result<()> {
+        for source in [SEED_CONFIG_TOML, GLOB_CONFIG_TOML] {
+            let config = source.replace("workspaces/svc-state", "workspaces/workestrate/svc-state");
+            let guard = DependsEnvGuard::new("cw-namespaced-instance-seeds", &config);
+            let seed = guard.config_dir().join("seed/settings.json");
+            std::fs::create_dir_all(guard.config_dir().join("seed"))?;
+            let state_root = guard.state_dir().join("workspaces/workestrate/svc-state");
+            let suffix = if source == GLOB_CONFIG_TOML {
+                "globbed/settings.json"
+            } else {
+                "settings.json"
+            };
+            let existing = state_root.join(suffix);
+            let parent = existing
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("seed parent missing"))?;
+            std::fs::create_dir_all(parent)?;
+            std::fs::write(&existing, "existing shared state")?;
+            let svc = ConfigWorkload::new("svc")?;
+
+            std::fs::write(&seed, "first instance")?;
+            svc.prepare(&empty_seed_env_view(), false, Some("first-1234abcd"))?;
+            std::fs::write(&seed, "second instance")?;
+            svc.prepare(&empty_seed_env_view(), false, Some("second-5678abcd"))?;
+            assert_eq!(
+                std::fs::read_to_string(state_root.join("first-1234abcd").join(suffix))?,
+                "first instance"
+            );
+            assert_eq!(
+                std::fs::read_to_string(state_root.join("second-5678abcd").join(suffix))?,
+                "second instance"
+            );
+            assert_eq!(std::fs::read_to_string(&existing)?, "existing shared state");
+
+            std::fs::write(&seed, "reseeded second instance")?;
+            svc.prepare(&empty_seed_env_view(), true, Some("second-5678abcd"))?;
+            assert_eq!(
+                std::fs::read_to_string(state_root.join("second-5678abcd").join(suffix))?,
+                "reseeded second instance"
+            );
+            assert_eq!(
+                std::fs::read_to_string(state_root.join("first-1234abcd").join(suffix))?,
+                "first instance"
+            );
+            assert_eq!(std::fs::read_to_string(&existing)?, "existing shared state");
+            svc.prepare(&empty_seed_env_view(), true, None)?;
+            assert_eq!(
+                std::fs::read_to_string(&existing)?,
+                "reseeded second instance"
+            );
+        }
+        Ok(())
+    }
+
     /// F3: seed files present but NO content root resolvable (synthetic
     /// workload, no declaring layer dir, no flake project root reachable)
     /// → explicit hard error naming the workload, NEVER a silent cwd

@@ -1515,7 +1515,10 @@ reasoning (seeds baked at create); it does not supersede any prior addendum.
 
 - The capsule's `workspaces/<name>-state` host template resolves to
   `workspaces/<name>-state/<instance-key>` — a per-instance subdirectory of
-  the state mount root. The operating principle, recorded verbatim:
+  the state mount root. A fleet namespace is retained in the same layout:
+  `workspaces/<namespace>/<name>-state/<instance-key>`. Mounts and seed
+  targets use the same rewrite; existing unscoped files are not moved or
+  copied into new instances. The operating principle, recorded verbatim:
 
   > **the recipe declares what state it needs, workestrate provides the
   > per-instance structure.**
