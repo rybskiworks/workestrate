@@ -76,16 +76,26 @@ pub(crate) fn resolve_mount_host(roots: &MountRoots, host: &str) -> Result<PathB
 
 /// Instance-scoped state-mount rewrite (ADR 0030 V-addendum §V2): when `key`
 /// is `Some` (a per-dir instance's id) and `path` is the workload's state
-/// mount root `workspaces/<workload>-state` or a path beneath it, insert the
-/// key segment immediately after the state root —
-/// `workspaces/<workload>-state/<key>[/...]`. Every other input (and ANY
+/// mount root `workspaces/[<namespace>/]<workload>-state` or a path beneath
+/// it, insert the key segment immediately after the state root. Every other input (and ANY
 /// input when `key` is `None` — singleton/non-per-dir posture) is returned
 /// byte-identical, so non-per-dir workloads see NO layout churn. Pure.
 pub(crate) fn instance_scoped_state_path(path: &str, workload: &str, key: Option<&str>) -> String {
     let Some(key) = key else {
         return path.to_string();
     };
-    let root = format!("workspaces/{workload}-state");
+    let legacy_root = format!("workspaces/{workload}-state");
+    let root = if path == legacy_root || path.starts_with(&format!("{legacy_root}/")) {
+        legacy_root
+    } else if let Some((namespace, _)) = path
+        .strip_prefix("workspaces/")
+        .and_then(|relative| relative.split_once('/'))
+        .filter(|(namespace, _)| !matches!(*namespace, "" | "." | ".."))
+    {
+        format!("workspaces/{namespace}/{workload}-state")
+    } else {
+        return path.to_string();
+    };
     if path == root {
         format!("{root}/{key}")
     } else if let Some(rest) = path.strip_prefix(&format!("{root}/")) {
@@ -621,6 +631,40 @@ mod tests {
                 "non-state path '{path}' must not be scoped"
             );
         }
+    }
+
+    #[test]
+    fn instance_scoped_state_path_scopes_namespaced_roots_only() -> anyhow::Result<()> {
+        for namespace in ["workestrate", "personal"] {
+            for suffix in ["", "/settings.json", "/nested/settings.json"] {
+                let root = format!("workspaces/{namespace}/svc-state");
+                let path = format!("{root}{suffix}");
+                assert_eq!(
+                    instance_scoped_state_path(&path, "svc", Some("project-1234abcd")),
+                    format!("{root}/project-1234abcd{suffix}")
+                );
+                assert_eq!(instance_scoped_state_path(&path, "svc", None), path);
+            }
+        }
+        for path in [
+            "workspaces/workestrate/other-state/settings.json",
+            "workspaces/workestrate/svc-stateful",
+            "workspaces/workestrate/svc-statex/settings.json",
+            "workspaces/workestrate/shared/settings.json",
+            "workspaces/team/nested/svc-state/settings.json",
+            "workspaces//svc-state/settings.json",
+            "workspaces/./svc-state/settings.json",
+            "workspaces/../svc-state/settings.json",
+            "/workspaces/workestrate/svc-state",
+            "${CWD}/workspaces/workestrate/svc-state",
+            "var/workestrate/svc-state",
+        ] {
+            assert_eq!(
+                instance_scoped_state_path(path, "svc", Some("project-1234abcd")),
+                path
+            );
+        }
+        Ok(())
     }
 
     fn unique_root(label: &str) -> std::path::PathBuf {

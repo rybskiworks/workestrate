@@ -2660,6 +2660,39 @@ mod tests {
     }
 
     #[test]
+    fn current_view_scopes_namespaced_mounts_for_each_per_dir_instance() -> Result<()> {
+        let workload = PerDirWorkload {
+            strategy: crate::config::InstanceStrategy::PerDir,
+        };
+        let mut declared = workload.plan();
+        declared.mounts[0].host = "workspaces/workestrate/pd-state".to_string();
+        let mut first = declared.clone();
+        apply_current_view_mutations(&mut first, &workload, "pd@first-1234abcd");
+        let mut second = declared.clone();
+        apply_current_view_mutations(&mut second, &workload, "pd@second-5678abcd");
+        assert_eq!(
+            first.mounts[0].host,
+            "workspaces/workestrate/pd-state/first-1234abcd"
+        );
+        assert_eq!(
+            second.mounts[0].host,
+            "workspaces/workestrate/pd-state/second-5678abcd"
+        );
+        assert_eq!(first.mounts[0].guest, "/data");
+        assert_eq!(second.mounts[0].guest, "/data");
+        assert_ne!(
+            crate::microsandbox::provenance::config_hash_of_plan(&first),
+            crate::microsandbox::provenance::config_hash_of_plan(&second)
+        );
+        let singleton = PerDirWorkload {
+            strategy: crate::config::InstanceStrategy::Singleton,
+        };
+        apply_current_view_mutations(&mut declared, &singleton, "pd");
+        assert_eq!(declared.mounts[0].host, "workspaces/workestrate/pd-state");
+        Ok(())
+    }
+
+    #[test]
     fn should_create_with_replace_true_for_chain_driven_replace() {
         use crate::microsandbox::runtime::ChainStep;
         // THE regression: a chain-chosen Replace with no explicit flag must
