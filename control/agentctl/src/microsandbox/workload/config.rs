@@ -28,6 +28,20 @@ fn field_content_root(
     layer_dirs.get(layer).cloned()
 }
 
+/// Use the same declaring content root as image build/load, independently of
+/// the dependency namespace or the flake that supplies local-build artifacts.
+fn image_repo_key(
+    provenance: &crate::merge::Provenance,
+    layer_dirs: &std::collections::HashMap<String, PathBuf>,
+    name: &str,
+) -> Option<String> {
+    let layer = provenance
+        .get(&format!("workloads.{name}.image"))
+        .or_else(|| provenance.get(&format!("workloads.{name}.kind")))?;
+    let dir = layer_dirs.get(layer)?;
+    Some(crate::images::repo_key::resolve_repo_key(dir))
+}
+
 /// Local-build artifacts belong to their declaring flake even when another
 /// layer overrides the image. The image pipeline resolves its own provenance;
 /// its source is only the fallback for the image-only runtime prerequisite.
@@ -69,6 +83,9 @@ pub struct ConfigWorkload {
     pub(super) seed_content_root: Option<PathBuf>,
     /// Source directory for local-build artifacts, or the image-only flake gate.
     pub(super) flake_source_dir: Option<PathBuf>,
+    /// Image build/load identity: registered repository name or canonical
+    /// declaring content directory, including the selected archive revision.
+    pub(super) image_repo_key: Option<String>,
     /// ADR 0026(d) discovery-lite: depends_on resolutions computed at
     /// construction (declaration triggers resolution on every up/exec/plan
     /// path). `plan()` appends the injected env AFTER the declared env and
@@ -268,6 +285,7 @@ impl ConfigWorkload {
         let source_dirs = crate::merge::get_layer_source_dirs().unwrap_or_default();
         let flake_source_dir =
             artifact_flake_source_dir(&workload, &provenance, &source_dirs, name);
+        let image_repo_key = image_repo_key(&provenance, &layer_dirs, name);
 
         // ADR 0030 Phase 2 T1: the workload's declaring fleet namespace
         // (from provenance) — the registry-record namespace its instances
@@ -311,6 +329,7 @@ impl ConfigWorkload {
             mount_content_root,
             seed_content_root,
             flake_source_dir,
+            image_repo_key,
             depends_resolved,
             mount_policies,
             namespace,
@@ -337,22 +356,16 @@ impl ConfigWorkload {
                 // not-yet-rebuilt homes keep working until their first
                 // post-upgrade ensure writes a pointer).
                 //
-                // Repo matching: `self.namespace` is the declaring
-                // fleet identity (ADR 0030 P2 T1) — the registered
-                // repo NAME when the declaring layer is under a registered
-                // checkout (matching the pointer key's repo segment), or the
-                // "default" sentinel when no repo identity is resolvable
-                // (synthetic/single-file/unregistered layers). Pass it as
-                // the preference hint; resolve_image_tag falls back to a
-                // name+ctx scan across repos when the hint is absent or
-                // misses (unregistered repos key their pointers by
-                // canonical path, which the namespace never carries).
+                // Build/load keys archived layers by their canonical content
+                // directory, while dependency discovery calls them "default".
+                // Keep those identities separate so another archive's pointer
+                // cannot select an old image after a successful rebuild.
                 let state_dir = crate::config::resolve_state_dir();
-                let repo = (self.namespace
-                    != crate::microsandbox::port_registry::default_namespace())
-                .then_some(self.namespace.as_str());
                 Some(crate::images::state::resolve_image_tag(
-                    &state_dir, repo, name, declared,
+                    &state_dir,
+                    self.image_repo_key.as_deref(),
+                    name,
+                    declared,
                 ))
             }
             _ => None,
@@ -2604,6 +2617,7 @@ egress = "deny"
             mount_content_root: None,
             seed_content_root: None,
             flake_source_dir: None,
+            image_repo_key: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),
@@ -2611,6 +2625,172 @@ egress = "deny"
     }
 
     // ---- F2: the lazy flake-root gate predicate ----
+
+    #[test]
+    fn plan_selects_current_archive_image_with_historical_pointers() -> Result<()> {
+        use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard};
+        use crate::images::state::{ImagesState, PointerRecord, image_tag_context, pointer_key};
+
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let tmp = tempfile::tempdir()?;
+        let config_dir = tmp.path().join("config");
+        let state_dir = tmp.path().join("state");
+        let old = state_dir.join("cache/gitv3/000-old/workestrate");
+        let current = state_dir.join("cache/gitv3/999-current/workestrate");
+        for dir in [&config_dir, &old, &current] {
+            std::fs::create_dir_all(dir)?;
+        }
+        let content = r#"
+schema_version = 1
+[workloads.svc]
+kind = "service"
+image = { recipe = "nix-layered", name = "svc-image", tag = "latest" }
+command = []
+[workloads.svc.network.defaults]
+egress = "deny"
+"#;
+        std::fs::write(current.join("workestrate.toml"), content)?;
+        std::fs::write(current.join("flake.nix"), "{}\n")?;
+        // SAFETY: the environment lock is held; the guard restores every key.
+        unsafe {
+            for key in CONFIG_ENV_KEYS {
+                std::env::remove_var(key);
+            }
+            std::env::set_var("WORKESTRATE_CONFIG", &config_dir);
+            std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+            std::env::set_var("WORKESTRATE_FLEET_DIR", &current);
+            std::env::set_var("WORKESTRATE_NO_PROJECT_CONFIG", "1");
+        }
+        crate::config::clear_inline_override();
+        let workload = ConfigWorkload::new("svc")?;
+        assert_eq!(workload.namespace(), "default");
+        let current_key = current.canonicalize()?.to_string_lossy().into_owned();
+        assert_eq!(
+            workload.image_repo_key.as_deref(),
+            Some(current_key.as_str())
+        );
+
+        let config = toml::from_str(content)?;
+        let provenance = workload
+            .provenance
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("loaded workload has no provenance"))?;
+        let (targets, skipped) = crate::images::build_cmd::select_eligible(
+            &config,
+            provenance,
+            &crate::merge::get_layer_dirs().unwrap_or_default(),
+            &crate::merge::get_layer_source_dirs().unwrap_or_default(),
+            &[],
+            Some("svc"),
+        )?;
+        assert!(skipped.is_empty());
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].repo.name, current_key);
+
+        let context = image_tag_context();
+        let mut state = ImagesState::default();
+        for (repo, tag) in [
+            (
+                old.canonicalize()?.to_string_lossy().into_owned(),
+                "svc-image:old",
+            ),
+            (current_key, "svc-image:current"),
+        ] {
+            state.upsert_pointer(
+                pointer_key(&repo, "svc-image", context.as_deref()),
+                PointerRecord {
+                    tag: tag.to_string(),
+                    updated_at: "2026-09-30T00:00:00Z".to_string(),
+                },
+            );
+        }
+        state.save(&state_dir)?;
+        let before = std::fs::read(crate::images::state::images_state_path(&state_dir))?;
+        assert_eq!(workload.plan().image.as_deref(), Some("svc-image:current"));
+        assert_eq!(
+            std::fs::read(crate::images::state::images_state_path(&state_dir))?,
+            before,
+            "plan must not rewrite old pointers or image records"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn plan_image_owner_is_independent_of_dependency_namespace() -> Result<()> {
+        use crate::config::test_support::{CONFIG_ENV_KEYS, ENV_TEST_LOCK, EnvGuard};
+        use crate::images::state::{ImagesState, PointerRecord, image_tag_context, pointer_key};
+
+        let _lock = ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment lock poisoned: {error}"))?;
+        let _env = EnvGuard::capture(CONFIG_ENV_KEYS);
+        let tmp = tempfile::tempdir()?;
+        let config_dir = tmp.path().join("config");
+        let state_dir = tmp.path().join("state");
+        let content = tmp.path().join("image-source");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::create_dir_all(&content)?;
+        // SAFETY: the environment lock is held; the guard restores every key.
+        unsafe {
+            std::env::set_var("WORKESTRATE_CONFIG", &config_dir);
+            std::env::set_var("WORKESTRATE_STATE_DIR", &state_dir);
+        }
+        let mut workload = synthetic_workload(
+            r#"
+schema_version = 1
+[workloads.svc]
+kind = "service"
+image = { recipe = "nix-layered", name = "svc-image" }
+command = []
+[workloads.svc.network.defaults]
+egress = "deny"
+"#,
+            "svc",
+        );
+        let provenance = [
+            ("workloads.svc.kind".to_string(), "base".to_string()),
+            (
+                "workloads.svc.image".to_string(),
+                "image-override".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let dirs = [
+            ("base".to_string(), tmp.path().join("base")),
+            ("image-override".to_string(), content.clone()),
+        ]
+        .into_iter()
+        .collect();
+        workload.namespace = "service-owner".to_string();
+        workload.image_repo_key = image_repo_key(&provenance, &dirs, "svc");
+        let image_owner = content.canonicalize()?.to_string_lossy().into_owned();
+        assert_eq!(
+            workload.image_repo_key.as_deref(),
+            Some(image_owner.as_str())
+        );
+
+        let context = image_tag_context();
+        let mut state = ImagesState::default();
+        for (repo, tag) in [
+            ("service-owner", "svc-image:namespace"),
+            (image_owner.as_str(), "svc-image:override"),
+        ] {
+            state.upsert_pointer(
+                pointer_key(repo, "svc-image", context.as_deref()),
+                PointerRecord {
+                    tag: tag.to_string(),
+                    updated_at: "2026-09-30T00:00:00Z".to_string(),
+                },
+            );
+        }
+        state.save(&state_dir)?;
+        assert_eq!(workload.plan().image.as_deref(), Some("svc-image:override"));
+        Ok(())
+    }
 
     #[test]
     fn image_override_keeps_local_build_artifacts_at_their_declaring_flake() -> Result<()> {
@@ -2898,6 +3078,7 @@ egress = "deny"
             mount_content_root: Some(repo.clone()),
             seed_content_root: None,
             flake_source_dir: None,
+            image_repo_key: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),
@@ -3121,6 +3302,7 @@ egress = "deny"
             mount_content_root: None,
             seed_content_root: None,
             flake_source_dir: None,
+            image_repo_key: None,
             depends_resolved: Vec::new(),
             mount_policies: Vec::new(),
             namespace: crate::microsandbox::port_registry::default_namespace(),

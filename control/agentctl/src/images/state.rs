@@ -343,8 +343,8 @@ impl ImagesState {
 ///
 /// READ-ONLY (a cheap `images.json` load — `resolve_image` runs at plan
 /// time; this path NEVER writes): look up the current-pointer for
-/// `(name, image_tag_context())`, preferring the `repo`-keyed entry when the
-/// declaring-repo identity is known; on a MISS fall back to the legacy
+/// `(repo, name, image_tag_context())` when the declaring-repo identity is
+/// known; on a MISS fall back to the legacy
 /// declared `name:<declared-tag>` form — byte-identical to pre-migration
 /// behavior (golden plans, and not-yet-rebuilt homes such as pi/tempest,
 /// keep working until their first post-upgrade ensure writes a pointer).
@@ -362,10 +362,11 @@ pub fn resolve_image_tag(
     let legacy = format!("{name}:{declared_tag}");
     let ctx = image_tag_context();
     let state = ImagesState::load(state_dir);
-    if let Some(repo) = repo
-        && let Some(p) = state.lookup_pointer(&pointer_key(repo, name, ctx.as_deref()))
-    {
-        return p.tag.clone();
+    if let Some(repo) = repo {
+        return match state.lookup_pointer(&pointer_key(repo, name, ctx.as_deref())) {
+            Some(pointer) => pointer.tag.clone(),
+            None => legacy,
+        };
     }
     for (key, p) in &state.pointers {
         if pointer_key_matches(key, name, ctx.as_deref()) {
@@ -834,10 +835,13 @@ mod tests {
     }
 
     /// Pointer upsert/lookup round-trip through save+load, and
-    /// resolve_image_tag honoring the repo hint then the cross-repo scan.
+    /// Image resolution stays within a known repository; synthetic workloads
+    /// without an identity retain the cross-repository fallback.
     #[test]
-    fn pointer_round_trip_and_resolution_preference() {
-        let _lock = crate::config::test_support::ENV_TEST_LOCK.lock().unwrap();
+    fn pointer_round_trip_and_resolution_preference() -> anyhow::Result<()> {
+        let _lock = crate::config::test_support::ENV_TEST_LOCK
+            .lock()
+            .map_err(|error| anyhow::anyhow!("environment lock poisoned: {error}"))?;
         crate::config::set_active_fleet(None);
         crate::config::clear_inline_override();
         let state_dir = unique_state_dir("images-pointers");
@@ -856,19 +860,17 @@ mod tests {
                 updated_at: "2026-08-24T10:01:00Z".to_string(),
             },
         );
-        state.save(&state_dir).expect("save");
+        state.save(&state_dir)?;
 
         // Repo hint wins over the cross-repo scan.
         assert_eq!(
             resolve_image_tag(&state_dir, Some("personal"), "img", "latest"),
             "img:aaaaaaaaaaaa"
         );
-        // Unknown repo hint → the cross-repo scan by name+ctx decides
-        // (deterministically: lexicographically first key).
+        // A known repository with no pointer must not borrow another image.
         assert_eq!(
             resolve_image_tag(&state_dir, Some("nosuch"), "img", "latest"),
-            "img:bbbbbbbbbbbb",
-            "scan order is BTreeMap (lexicographic): 'other' < 'personal'"
+            "img:latest"
         );
         assert_eq!(
             resolve_image_tag(&state_dir, None, "img", "latest"),
@@ -881,6 +883,7 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
     }
 
     /// image_tag_context precedence: armed inline-override ref > active
