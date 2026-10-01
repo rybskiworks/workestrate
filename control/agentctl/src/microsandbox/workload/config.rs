@@ -2034,7 +2034,12 @@ egress = "deny"
     #[test]
     fn prepare_isolates_namespaced_instance_seeds_and_preserves_existing_state() -> Result<()> {
         for source in [SEED_CONFIG_TOML, GLOB_CONFIG_TOML] {
-            let config = source.replace("workspaces/svc-state", "workspaces/workestrate/svc-state");
+            let config = source
+                .replace("workspaces/svc-state", "workspaces/workestrate/svc-state")
+                .replace(
+                    "[[workloads.svc.seed_files]]",
+                    "[[workloads.svc.seed_files]]\ntemplate = true",
+                );
             let guard = DependsEnvGuard::new("cw-namespaced-instance-seeds", &config);
             let seed = guard.config_dir().join("seed/settings.json");
             std::fs::create_dir_all(guard.config_dir().join("seed"))?;
