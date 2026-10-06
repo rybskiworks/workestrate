@@ -141,43 +141,34 @@ fn dep_conflict(config: &ConfigFile, dependent: &str, dep: &str) -> DepConflict 
         .unwrap_or(DepConflict::default_chain())
 }
 
-/// The declaring fleet namespace of `workload` (ADR 0030 Phase 2 T1):
-/// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
-/// layer dir → repo_key), defaulting to "default" when no repo identity is
-/// resolvable (legacy/synthetic layers, single-file mode).
-/// The declaring fleet namespace of `workload` (ADR 0030 Phase 2 T1):
-/// resolved from the merge provenance (`workloads.<name>.<field>` → layer →
-/// layer dir → repo_key), defaulting to "default" when no repo identity is
-/// resolvable (legacy/synthetic layers, single-file mode).
-///
-/// The caller passes the provenance EXPLICITLY (it is a one-shot slot —
-/// [`crate::merge::take_provenance`] drains it, so a second read returns
-/// None); `ConfigWorkload::new_with_use_overrides` takes it once and threads
-/// it here and into `resolve_depends_on`.
+/// Resolve the workload's declaring fleet from loader-owned provenance.
+/// Archive paths and display labels alone cannot identify a fleet: two
+/// registered aliases can consume the same immutable archive. Unregistered
+/// layers retain the existing checkout-path/default fallback.
 pub(crate) fn namespace_for(
     provenance: Option<&crate::merge::Provenance>,
     layer_dirs: &std::collections::HashMap<String, std::path::PathBuf>,
+    field_fleets: &std::collections::HashMap<String, String>,
     workload: &str,
 ) -> String {
     let Some(provenance) = provenance else {
         return crate::microsandbox::port_registry::default_namespace();
     };
-    // The workload's declaring layer: any field's provenance names the layer
-    // that declared the workload (kind/image/depends_on all resolve to the
-    // same declaring fleet for a single-repo workload).
-    let layer = provenance
-        .get(&format!("workloads.{workload}.depends_on"))
-        .or_else(|| provenance.get(&format!("workloads.{workload}.kind")))
-        .or_else(|| provenance.get(&format!("workloads.{workload}.image")));
-    let Some(layer) = layer else {
+    // Declaration ownership survives an override that only changes options
+    // such as depends_on; an override declaring kind owns the definition.
+    let origin = provenance
+        .get_key_value(&format!("workloads.{workload}.kind"))
+        .or_else(|| provenance.get_key_value(&format!("workloads.{workload}.image")))
+        .or_else(|| provenance.get_key_value(&format!("workloads.{workload}.depends_on")));
+    let Some((field, layer)) = origin else {
         return crate::microsandbox::port_registry::default_namespace();
     };
+    if let Some(fleet) = field_fleets.get(field) {
+        return fleet.clone();
+    }
     let Some(dir) = layer_dirs.get(layer) else {
         return crate::microsandbox::port_registry::default_namespace();
     };
-    // The namespace is the declaring REPO identity. A layer whose declaring
-    // dir is NOT a registered fleet checkout (synthetic / single-file /
-    // test temp dir) has no repo identity -> the legacy "default" namespace.
     let registered = crate::images::repo_key::registered_repo_checkouts();
     crate::images::repo_key::repo_key_for_optional(dir, &registered)
         .unwrap_or_else(crate::microsandbox::port_registry::default_namespace)
@@ -583,7 +574,13 @@ pub async fn auto_start_dependencies(
     // pass them explicitly.
     let provenance = crate::merge::take_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-    let namespace = namespace_for(provenance.as_ref(), &layer_dirs, workload_name);
+    let field_fleets = crate::merge::get_field_fleets().unwrap_or_default();
+    let namespace = namespace_for(
+        provenance.as_ref(),
+        &layer_dirs,
+        &field_fleets,
+        workload_name,
+    );
     let actions = plan_dep_starts(
         &config,
         workload_name,
@@ -3323,14 +3320,14 @@ command = []
         // "default" fallbacks that do not depend on the live registry.
         // No provenance → "default" (legacy/synthetic).
         assert_eq!(
-            namespace_for(None, &dirs, "pi"),
+            namespace_for(None, &dirs, &std::collections::HashMap::new(), "pi"),
             crate::microsandbox::port_registry::default_namespace()
         );
         // Provenance names an unknown layer → "default".
         let mut stray = crate::merge::Provenance::new();
         stray.insert("workloads.pi.kind".to_string(), "ghost".to_string());
         assert_eq!(
-            namespace_for(Some(&stray), &dirs, "pi"),
+            namespace_for(Some(&stray), &dirs, &std::collections::HashMap::new(), "pi"),
             crate::microsandbox::port_registry::default_namespace()
         );
         // An UNREGISTERED declaring dir (not a fleet checkout) has no
@@ -3341,7 +3338,12 @@ command = []
         let mut unreg_dirs = std::collections::HashMap::new();
         unreg_dirs.insert("synthetic".to_string(), tmp.join("not-a-repo"));
         assert_eq!(
-            namespace_for(Some(&unreg), &unreg_dirs, "pi"),
+            namespace_for(
+                Some(&unreg),
+                &unreg_dirs,
+                &std::collections::HashMap::new(),
+                "pi"
+            ),
             crate::microsandbox::port_registry::default_namespace(),
             "an unregistered declaring dir must fall back to the default namespace"
         );

@@ -87,6 +87,19 @@ execution. Archive consumption uses the selected commit independently of
 uncommitted edits in that clone. Local plain-path entries load their current
 filesystem content with layer branch `local`.
 
+A workload's dependency namespace is its declaring registered fleet, preserved
+when its content is read from an archive or an inline ref. Two fleet names using
+the same commit keep separate dependency namespaces. Option-only overrides do
+not change that ownership; a higher layer that redeclares the workload's `kind`
+owns the definition. Unregistered project and synthetic definitions retain the
+checkout-path fallback, or `default` when no registered checkout matches.
+
+Older binaries may have registered Git-backed fleet instances under `default`.
+Those records are refused by the corrected fleet-scoped dependency lookup;
+they are not renamed or adopted automatically. Recreate or deliberately migrate
+such instances after inspecting their ownership. Updating source or binary pins
+does not migrate existing runtime records.
+
 For ordinary Git-backed consumption, resolution checks the lock's entry for the
 effective ref, then a matching primary pin, then the registry-recorded `rev`.
 If none exists, it resolves the ref and records a pin with a stderr notice.

@@ -335,6 +335,8 @@ fn process_override_section(
 /// The `$WORKESTRATE_FLEET_DIR` environment variable bypasses discovery and
 /// loads a single dev/testing layer directly.
 pub fn load_config() -> Result<ConfigFile> {
+    // A failed or registry-less reload must not retain an earlier fleet origin.
+    crate::merge::set_field_fleets(None);
     // 1. Dev/testing override: single layer, no merging.
     if let Ok(dir) = std::env::var("WORKESTRATE_FLEET_DIR") {
         let path = PathBuf::from(dir).join("workestrate.toml");
@@ -397,7 +399,17 @@ pub fn load_config() -> Result<ConfigFile> {
             // resolve_active_fleet yields no layers).
             None => resolve_store_dir().join("fleets").join(name),
         };
-        layers.extend(load_fleet_layers(name, &content_root)?);
+        let fleet_layers = load_fleet_layers(name, &content_root)?;
+        let registered = registry
+            .as_ref()
+            .is_some_and(|reg| reg.fleets.contains_key(name));
+        layers.extend(fleet_layers.into_iter().map(|layer| {
+            if registered {
+                layer.with_fleet(name)
+            } else {
+                layer
+            }
+        }));
     }
 
     // 3.5. User-global overrides (between fleet layers and trusted project).
@@ -470,6 +482,7 @@ pub fn load_config() -> Result<ConfigFile> {
         );
     }
 
+    let mut field_fleets = crate::merge::field_fleets_from(&layers);
     let mut layer_dirs = crate::merge::layer_dirs_from(&layers);
     let mut source_dirs = crate::merge::layer_source_dirs_from(&layers);
     let (mut merged, mut provenance) = crate::merge::merge_layers(&layers)?;
@@ -501,6 +514,16 @@ pub fn load_config() -> Result<ConfigFile> {
     let mut virt_ladder = collect_virtualization_ladder(registry.as_ref(), &layers);
     let mut ssh_ladder = collect_ssh_policy_ladder(registry.as_ref(), &layers);
     if let Some((workload, layer)) = substituted_layer {
+        let substituted_origins = crate::merge::field_fleets_from(std::slice::from_ref(&layer));
+        // A single-file ref can declare other workloads. Only this workload
+        // was substituted; do not reset origins of unrelated overrides.
+        for field in ["kind", "image", "depends_on"] {
+            let key = format!("workloads.{workload}.{field}");
+            field_fleets.remove(&key);
+            if let Some(fleet) = substituted_origins.get(&key) {
+                field_fleets.insert(key, fleet.clone());
+            }
+        }
         source_dirs.extend(crate::merge::layer_source_dirs_from(std::slice::from_ref(
             &layer,
         )));
@@ -525,6 +548,7 @@ pub fn load_config() -> Result<ConfigFile> {
     crate::merge::set_layer_dirs(Some(layer_dirs));
     crate::merge::set_layer_source_dirs(Some(source_dirs));
     validate_config(&merged)?;
+    crate::merge::set_field_fleets(Some(field_fleets));
     Ok(merged)
 }
 
@@ -666,6 +690,7 @@ fn apply_inline_override_substitution(
         }
         crate::merge::Layer::load(&repo, &file)?
     };
+    let layer = layer.with_fleet(&repo);
     let Some(substituted) = layer.config.workloads.get(workload).cloned() else {
         anyhow::bail!(
             "workload '{workload}' does not exist at ref '{config_ref}' in repo '{repo}'"

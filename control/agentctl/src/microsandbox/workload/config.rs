@@ -293,7 +293,13 @@ impl ConfigWorkload {
         // is passed explicitly (take_provenance drained it above; a second
         // read would return None).
         let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
-        let namespace = crate::commands::deps::namespace_for(Some(&provenance), &layer_dirs, name);
+        let field_fleets = crate::merge::get_field_fleets().unwrap_or_default();
+        let namespace = crate::commands::deps::namespace_for(
+            Some(&provenance),
+            &layer_dirs,
+            &field_fleets,
+            name,
+        );
 
         // ADR 0026(d): a declared depends_on map resolves EVERY declared dep
         // at plan time — no flag. A required-but-not-running dep refuses

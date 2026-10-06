@@ -317,3 +317,6 @@ pub(crate) mod tests {
         set_active_fleet(None);
     }
 }
+
+#[cfg(test)]
+mod namespace_tests;
