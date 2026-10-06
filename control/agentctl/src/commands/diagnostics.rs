@@ -160,6 +160,7 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
     names.sort();
     let provenance = crate::merge::get_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    let field_fleets = crate::merge::get_field_fleets().unwrap_or_default();
     // G5: the listing is the active fleet's config view — one value for
     // every row.
     let active_fleet = crate::config::active_fleet_name();
@@ -182,6 +183,7 @@ pub fn cmd_workloads(json: bool) -> Result<()> {
                 namespace: crate::commands::deps::namespace_for(
                     provenance.as_ref(),
                     &layer_dirs,
+                    &field_fleets,
                     name,
                 ),
                 fleet: active_fleet.clone(),
@@ -319,6 +321,7 @@ fn apply_config_staleness(entries: &mut [crate::microsandbox::runtime::PsEntry])
     // declaring-repo namespace exactly as ConfigWorkload::new would.
     let provenance = crate::merge::get_provenance();
     let layer_dirs = crate::merge::get_layer_dirs().unwrap_or_default();
+    let field_fleets = crate::merge::get_field_fleets().unwrap_or_default();
     for e in entries.iter_mut() {
         let Some(recorded) = e.config_hash.clone() else {
             continue; // pre-stamp record: never auto-stale, nothing displayed
@@ -326,8 +329,12 @@ fn apply_config_staleness(entries: &mut [crate::microsandbox::runtime::PsEntry])
         if !cfg.workloads.contains_key(&e.workload) {
             continue; // workload gone from the active config
         }
-        let namespace =
-            crate::commands::deps::namespace_for(provenance.as_ref(), &layer_dirs, &e.workload);
+        let namespace = crate::commands::deps::namespace_for(
+            provenance.as_ref(),
+            &layer_dirs,
+            &field_fleets,
+            &e.workload,
+        );
         if namespace != e.namespace {
             continue; // foreign-namespace record: not this config's row
         }

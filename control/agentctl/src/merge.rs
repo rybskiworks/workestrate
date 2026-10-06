@@ -25,6 +25,9 @@ pub struct Layer {
     /// for directory-mode layers, or the file's parent dir for single-file
     /// mode — rather than the flake project root; see [`layer_dirs_from`].
     pub source_path: Option<PathBuf>,
+    /// Registered identity assigned by the config loader, independently of
+    /// checkout/archive paths and display labels. Synthetic layers have none.
+    fleet_name: Option<String>,
 }
 
 impl Layer {
@@ -86,12 +89,44 @@ impl Layer {
             config,
             raw,
             source_path,
+            fleet_name: None,
         })
+    }
+
+    pub(crate) fn with_fleet(mut self, fleet: &str) -> Self {
+        self.fleet_name = Some(fleet.to_string());
+        self
     }
 
     pub(crate) fn raw(&self) -> &toml::Value {
         &self.raw
     }
+}
+
+/// Registered origins of the workload fields that establish namespace
+/// ownership. Track the actual last writer rather than its display label:
+/// a fleet called `project` can coexist with the synthetic project layer.
+pub(crate) fn field_fleets_from(layers: &[Layer]) -> HashMap<String, String> {
+    let mut origins = HashMap::new();
+    for layer in layers {
+        let Some(workloads) = layer.raw.get("workloads").and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (name, workload) in workloads {
+            for field in ["kind", "image", "depends_on"] {
+                if workload.get(field).is_none() {
+                    continue;
+                }
+                let key = format!("workloads.{name}.{field}");
+                if let Some(fleet) = &layer.fleet_name {
+                    origins.insert(key, fleet.clone());
+                } else {
+                    origins.remove(&key);
+                }
+            }
+        }
+    }
+    origins
 }
 
 /// Build the layer-name → content-root map for a merged layer set.
@@ -308,6 +343,26 @@ pub fn get_layer_source_dirs() -> Option<HashMap<String, PathBuf>> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+/// Registered origins of namespace-defining fields from the most recent load.
+static FIELD_FLEETS: std::sync::Mutex<Option<HashMap<String, String>>> =
+    std::sync::Mutex::new(None);
+
+pub(crate) fn set_field_fleets(fleets: Option<HashMap<String, String>>) {
+    let mut slot = match FIELD_FLEETS.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *slot = fleets;
+}
+
+pub(crate) fn get_field_fleets() -> Option<HashMap<String, String>> {
+    let slot = match FIELD_FLEETS.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    slot.clone()
 }
 
 // ---------------------------------------------------------------------------
