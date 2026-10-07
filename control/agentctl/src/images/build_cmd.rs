@@ -1612,16 +1612,12 @@ mod tests {
         Ok(())
     }
 
-    /// The §3.1 re-load gate end-to-end through process_target: under A2 a
-    /// same-content run is a plain Skip (never reaches the pipeline), so the
-    /// gate is exercised via `--reload-images`: force flips the fresh+present
-    /// Skip to RebuildForced, the builder realizes the SAME outPath (nix-store
-    /// dedup) and the tag is present → `msb load` is SKIPPED and the action is
-    /// the exact operator note "image unchanged in store; tag already
-    /// current"; the record's drv_path still refreshes.
+    /// An explicit reload imports the image even when the realized output and
+    /// database tag are unchanged. Nix may reuse its output, but the local
+    /// runtime cache must still be repaired and verified.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded test runtime; see runtime::tests
-    async fn outpath_gate_skip_reports_tag_already_current() -> Result<()> {
+    async fn force_imports_even_when_output_and_tag_are_unchanged() -> Result<()> {
         let _guard = pin_no_tag_context();
         let (tmp, target) = target_fixture("flow-gate", "pi");
         let state_dir = unique_state_dir("flow-gate-state");
@@ -1650,13 +1646,15 @@ mod tests {
         state.save(&state_dir)?;
 
         // force → RebuildForced; the builder realizes the SAME outPath; the
-        // pre-gate probe sees the tag present → SkipLoad, no loader call.
+        // pre-gate probe sees the tag present; force still imports and verifies.
         let mut probe = FakeStoreProbe::new();
+        probe.push(StoreTag::Present);
         probe.push(StoreTag::Present);
         probe.push(StoreTag::Present);
         let mut builder = FakeBuilder::new();
         builder.push_ok(OUT_A);
-        let mut loader = FakeLoader::new(); // empty queue: must NOT be called
+        let mut loader = FakeLoader::new();
+        loader.push_ok();
         let report = process_target(
             &target,
             &state_dir,
@@ -1672,15 +1670,13 @@ mod tests {
         )
         .await?;
         assert_eq!(report.decision, "rebuild (forced)");
-        assert_eq!(
-            report.action_taken, "image unchanged in store; tag already current",
-            "the exact §3.1 gate-skip note"
-        );
-        assert!(loader.calls.is_empty(), "the gate skipped msb load");
-        let record = ImagesState::load(&state_dir)
+        assert_eq!(report.action_taken, "built+loaded+recorded");
+        assert_eq!(loader.calls.len(), 1, "forced import must reach the loader");
+        assert_eq!(loader.calls[0], (PathBuf::from(OUT_A), TAG_A.to_string()));
+        let saved = ImagesState::load(&state_dir);
+        let record = saved
             .lookup(&key)
-            .expect("record upserted on the gate-skip path")
-            .clone();
+            .ok_or_else(|| anyhow::anyhow!("record missing after forced import"))?;
         assert_eq!(record.drv_path, "drv-B", "drv_path refreshes");
         assert_eq!(record.out_path, OUT_A);
 

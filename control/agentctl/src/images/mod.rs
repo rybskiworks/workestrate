@@ -58,6 +58,7 @@
 //!   kernel-release `flock(2)` is a follow-up decision for phases C/D.
 
 pub mod build_cmd;
+mod cache_probe;
 pub mod detect;
 pub mod ensure;
 pub mod gc;

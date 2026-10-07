@@ -28,6 +28,9 @@ hex = "0.4"
 idna = "1.1"
 libc = "0.2"
 microsandbox = { version = "=0.6.18", features = ["net"] }
+# Use the pinned backend's OCI metadata types and EROFS reader for read-only
+# cache availability checks. Already part of the SDK's dependency graph.
+microsandbox-image = "=0.6.18"
 # SSH gateway handoff: the fork's network engine (divert prelude framing)
 # and shared domain types (guest SSH policy). Both crates are already in
 # the .cargo patch table, so they resolve to the vendored fork.
@@ -81,13 +84,6 @@ schema = ["dep:schemars"]
 
 [dev-dependencies]
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
-# The vendored fork's image crate (patched in via .cargo/config.toml) — used
-# ONLY by the host-Bug-B regression test in images::state, which validates
-# computed store tags against the REAL docker/OCI reference parser
-# (`microsandbox_image::Reference`, re-exported from oci-client) rather than
-# a local approximation. Already in the build graph transitively via the
-# microsandbox SDK, so it adds no new packages.
-microsandbox-image = "=0.6.18"
 tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]

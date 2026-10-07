@@ -25,7 +25,8 @@
 //!    the tag is still in the store (eval churn resolving to an
 //!    already-realized outPath costs no `msb load`) — BUT load anyway when
 //!    the tag is GONE (out-of-band deletion) or the record's `out_path` is
-//!    empty (phase-C trust records) or differs.
+//!    empty (phase-C trust records) or differs. An explicit force always
+//!    imports the realized output, including when Nix returns the same path.
 //! 3. **msb load** ([`ImageLoader`]; real backend [`MsbCliLoader`]):
 //!    `gunzip -c <outPath>` piped into `msb load -t <tag>` — two
 //!    `std::process::Command`s, no shell, no tarball staged on disk (the
@@ -659,7 +660,11 @@ pub async fn run_build_pipeline<B: ImageBuilder, L: ImageLoader, P: StoreProbe>(
         .tag_state(&job.tag)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let decision = reload_decision(&record_out, &out_path, store);
+    let decision = if job.force {
+        ReloadDecision::Load
+    } else {
+        reload_decision(&record_out, &out_path, store)
+    };
 
     // Stage 3: msb load + post-load store verification.
     let action = match decision {
@@ -675,7 +680,7 @@ pub async fn run_build_pipeline<B: ImageBuilder, L: ImageLoader, P: StoreProbe>(
             {
                 StoreTag::Present => LoadAction::Loaded,
                 StoreTag::Gone => anyhow::bail!(
-                    "msb load reported success but tag '{}' is not in the store — the msb \
+                    "msb load reported success but tag '{}' is not in the store or its cache is incomplete — the msb \
                      store is ground truth (spec 21 §3.2); inspect the store ('msb image \
                      ls') and retry the load",
                     job.tag

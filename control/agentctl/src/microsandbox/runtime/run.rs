@@ -1174,6 +1174,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // loser surfaces a clear port-collision error at registration.
     let bind_ip = slot_bind_ip(&spec.instance, &state_dir)?;
 
+    // Only a confirmed stopped/crashed restart bypasses port selection. Fresh
+    // creates and running-instance health probes keep their allocation order.
+    let restart_facts = restart_facts_before_port_selection(&state_dir, spec, workload).await?;
+
     // ADR 0026(c)/C3: --port-auto replaces every declared host port with a
     // lock-probed free port on the slot's bind (guest unchanged). The probed
     // ports are NOT a reservation — see probe_free_ports' doc comment; the
@@ -1184,45 +1188,46 @@ pub(crate) async fn build_sandbox<W: Workload>(
     //
     // ADR 0030 Phase 3: the workload's declared instance.port drives
     // selection. --port-auto (all ports) still wins when both are used.
-    if !spec.port_auto {
-        // --replace: the instance being replaced never blocks its own
-        // preferred port. Selection runs BEFORE the replace teardown
-        // (ChainStep::Replace / check_occupied_or_replace below), so the
-        // predecessor's registry record and OS listener would otherwise
-        // force an increment on every `up --replace` cycle. Foreign holders
-        // still block (fail-closed). NOTE: keyed on the EXPLICIT
-        // `spec.replace`; the conflict chain's Replace disposition is only
-        // known after `decide_step` below, so a chain-driven replace of a
-        // zombie/stale predecessor still increments (documented limitation).
-        let replace_target = spec.replace.then_some(spec.instance.as_str());
-        apply_instance_port_policy(
-            &state_dir,
-            workload,
-            bind_ip,
-            &mut plan.ports,
-            replace_target,
-        )?;
-    }
-    if spec.port_auto && !plan.ports.is_empty() {
-        let probed =
-            super::super::port_registry::probe_free_ports(&state_dir, bind_ip, plan.ports.len())?;
-        for (p, host) in plan.ports.iter_mut().zip(probed) {
-            p.host = host;
+    if restart_facts.is_none() {
+        if !spec.port_auto {
+            // --replace: the instance being replaced never blocks its own
+            // preferred port. Selection runs BEFORE the replace teardown
+            // (ChainStep::Replace / check_occupied_or_replace below), so the
+            // predecessor's registry record and OS listener would otherwise
+            // force an increment on every `up --replace` cycle. Foreign holders
+            // still block (fail-closed). NOTE: keyed on the EXPLICIT
+            // `spec.replace`; the conflict chain's Replace disposition is only
+            // known after `decide_step` below, so a chain-driven replace of a
+            // zombie/stale predecessor still increments (documented limitation).
+            let replace_target = spec.replace.then_some(spec.instance.as_str());
+            apply_instance_port_policy(
+                &state_dir,
+                workload,
+                bind_ip,
+                &mut plan.ports,
+                replace_target,
+            )?;
         }
-    } else {
-        // P1: host = 0 marks a per-port auto allocation (namespaced ports).
-        // Each 0-marked port is probed individually on the slot's bind. This
-        // runs even when --port-auto is absent; --port-auto above wins when
-        // both are used (it overwrites every host, including 0-marked ones).
-        apply_auto_ports(&state_dir, bind_ip, &mut plan.ports)?;
+        if spec.port_auto && !plan.ports.is_empty() {
+            let probed = super::super::port_registry::probe_free_ports(
+                &state_dir,
+                bind_ip,
+                plan.ports.len(),
+            )?;
+            for (p, host) in plan.ports.iter_mut().zip(probed) {
+                p.host = host;
+            }
+        } else {
+            // P1: host = 0 marks a per-port auto allocation (namespaced ports).
+            // Each 0-marked port is probed individually on the slot's bind. This
+            // runs even when --port-auto is absent; --port-auto above wins when
+            // both are used (it overwrites every host, including 0-marked ones).
+            apply_auto_ports(&state_dir, bind_ip, &mut plan.ports)?;
+        }
     }
 
-    // Host ports from the (possibly --port-auto-mutated) plan: single source
-    // of truth for the collision check and the legacy `ports` field in the
-    // lifecycle state record, so the record always carries the EFFECTIVE
-    // (probed) ports — `ps`/`down` recover them. Hoisted BEFORE the
-    // occupancy gate so the chain's `start` element (StartExisting) and the
-    // create path share the same values.
+    // Fresh creates register the selected plan ports. A retained restart
+    // instead registers the SDK's persisted mappings, validated below.
     let host_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
 
     // Register with full lifecycle metadata so `ps` and `down --all` work.
@@ -1247,7 +1252,10 @@ pub(crate) async fn build_sandbox<W: Workload>(
     // child/foreground build gate alike — forcing ChainStep::Replace
     // (teardown + fresh create) even when the chain would reuse or fail.
     let declared_ports: Vec<u16> = plan.ports.iter().map(|p| p.host).collect();
-    let facts = super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?;
+    let facts = match restart_facts {
+        Some(facts) => facts,
+        None => super::reconcile::gather_facts(&state_dir, &spec.instance, &declared_ports).await?,
+    };
     let chain = workload.instance_conflict_chain();
     let step = super::reconcile::decide_step(&chain, &facts, &spec.instance, spec.replace)?;
     // ADR 0032 A3: an on_skew = "replace" disposition decided on the Reuse
@@ -1333,6 +1341,16 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 facts.record.as_ref().and_then(|r| r.context.as_deref()),
                 crate::config::active_fleet_name().as_deref(),
             );
+            // The SDK restarts its stored network configuration. Validate those
+            // exact bindings before any policy write or lifecycle mutation.
+            let retained = prepare_retained_restart(
+                &state_dir,
+                &spec.instance,
+                &port_pairs,
+                facts.record.as_ref(),
+                bind_ip,
+            )
+            .await?;
             // The policy dir may be gone (an earlier `down` removed it while
             // the sandbox was stopped); `handle.start()` re-loads the policy,
             // so the write must cover this path too (ordering invariant: see
@@ -1351,9 +1369,7 @@ pub(crate) async fn build_sandbox<W: Workload>(
                 &state_dir,
                 spec,
                 workload,
-                bind_ip,
-                &host_ports,
-                &port_pairs,
+                retained,
                 prior_image_out_hash.as_deref(),
                 prior_config_hash.as_deref(),
             )
@@ -1590,43 +1606,196 @@ pub(crate) async fn build_sandbox<W: Workload>(
     Ok(BuildOutcome::Ready(Box::new(sandbox), Box::new(config)))
 }
 
+/// Reconcile only confirmed stopped/crashed instances before port selection.
+/// Other states retain the normal post-allocation health-probe targets.
+async fn restart_facts_before_port_selection<W: Workload>(
+    state_dir: &Path,
+    spec: &InstanceSpec,
+    workload: &W,
+) -> Result<Option<super::reconcile::ReconcileFacts>> {
+    use microsandbox::sandbox::SandboxStatus;
+    if spec.replace {
+        return Ok(None);
+    }
+    let Ok(handle) = super::get_sandbox(&spec.instance).await else {
+        return Ok(None);
+    };
+    if !matches!(
+        handle.status_snapshot(),
+        SandboxStatus::Stopped | SandboxStatus::Crashed
+    ) {
+        return Ok(None);
+    }
+    let facts = super::reconcile::gather_facts(state_dir, &spec.instance, &[]).await?;
+    let retained = restart_uses_stored_ports(
+        &facts,
+        &workload.instance_conflict_chain(),
+        &spec.instance,
+        spec.replace,
+    )?;
+    Ok(retained.then_some(facts))
+}
+
+fn restart_uses_stored_ports(
+    facts: &super::reconcile::ReconcileFacts,
+    chain: &[crate::config::ConflictStep],
+    instance: &str,
+    replace: bool,
+) -> Result<bool> {
+    use microsandbox::sandbox::SandboxStatus;
+    if replace
+        || !matches!(
+            facts.msb_status,
+            Some(SandboxStatus::Stopped | SandboxStatus::Crashed)
+        )
+    {
+        return Ok(false);
+    }
+    Ok(
+        super::reconcile::decide_step(chain, facts, instance, false)?
+            == super::reconcile::ChainStep::StartExisting,
+    )
+}
+
+struct RetainedRestart {
+    handle: microsandbox::sandbox::SandboxHandle,
+    bind_ip: IpAddr,
+    ports: Vec<PortMapping>,
+}
+
+/// Decode the stored TCP mappings without selecting new host ports. Labels
+/// survive only when their recorded or declared tuple matches the stored tuple.
+fn retained_port_mappings(
+    network: &microsandbox::sandbox::NetworkSpec,
+    known_ports: &[PortMapping],
+) -> Result<Vec<PortMapping>> {
+    if !network.enabled {
+        return Ok(Vec::new());
+    }
+    let mut ports: Vec<PortMapping> = Vec::new();
+    for stored in &network.ports {
+        anyhow::ensure!(
+            stored.protocol == microsandbox::sandbox::PortProtocol::Tcp,
+            "cannot restart a retained non-TCP port mapping with the TCP-only port registry"
+        );
+        anyhow::ensure!(
+            stored.host_port != 0,
+            "retained host port is unresolved (0)"
+        );
+        let bind_ip: IpAddr = stored.host_bind.parse().map_err(|error| {
+            anyhow::anyhow!("invalid retained host bind '{}': {error}", stored.host_bind)
+        })?;
+        anyhow::ensure!(
+            ports.iter().all(|port| port.bind_ip == bind_ip),
+            "cannot restart retained port mappings with mixed host bind addresses"
+        );
+        let name = known_ports.iter().find_map(|port| {
+            (port.bind_ip == bind_ip
+                && port.host == stored.host_port
+                && port.guest == stored.guest_port)
+                .then(|| port.name.clone())
+                .flatten()
+        });
+        ports.push(PortMapping {
+            host: stored.host_port,
+            guest: stored.guest_port,
+            bind_ip,
+            name,
+        });
+    }
+    Ok(ports)
+}
+
+/// Own stopped records reserve ports but do not listen. Ignore only that
+/// reservation; foreign records and real listeners must still block restart.
+fn check_retained_ports_available(
+    state_dir: &Path,
+    instance: &str,
+    ports: &[PortMapping],
+) -> Result<()> {
+    let records = super::super::port_registry::list_records(state_dir)?;
+    for port in ports {
+        anyhow::ensure!(
+            !records.iter().any(|record| record.instance != instance
+                && record.bind_ip == port.bind_ip
+                && record.ports.contains(&port.host)),
+            "cannot restart '{}': retained port {}:{} is reserved by another instance",
+            instance,
+            port.bind_ip,
+            port.host
+        );
+        std::net::TcpListener::bind((port.bind_ip, port.host)).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot restart '{}': retained port {}:{} is unavailable: {error}",
+                instance,
+                port.bind_ip,
+                port.host
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn retained_bind_ip(ports: &[PortMapping], recorded: Option<IpAddr>, allocated: IpAddr) -> IpAddr {
+    ports
+        .first()
+        .map(|port| port.bind_ip)
+        .or(recorded)
+        .unwrap_or(allocated)
+}
+
+async fn prepare_retained_restart(
+    state_dir: &Path,
+    instance: &str,
+    declared_ports: &[PortMapping],
+    record: Option<&super::super::port_registry::SandboxInstanceRecord>,
+    allocated_bind_ip: IpAddr,
+) -> Result<RetainedRestart> {
+    let handle = super::get_sandbox(instance).await?;
+    let stored = handle.config()?;
+    let mut known_ports = record
+        .map(|record| record.port_pairs.clone())
+        .unwrap_or_default();
+    known_ports.extend_from_slice(declared_ports);
+    let ports = retained_port_mappings(&stored.spec.network, &known_ports)?;
+    check_retained_ports_available(state_dir, instance, &ports)?;
+    let bind_ip = retained_bind_ip(
+        &ports,
+        record.map(|record| record.bind_ip),
+        allocated_bind_ip,
+    );
+    Ok(RetainedRestart {
+        handle,
+        bind_ip,
+        ports,
+    })
+}
+
 /// ADR 0030 Phase 0 `start` element: start a stopped/crashed sandbox via
 /// msb `handle.start()` (the capability the CLI never used), register the
 /// lifecycle record (the stopped sandbox may have no record), and return the
 /// live sandbox + foreground config so the caller execs the workload command
 /// into it. Preserves the sandbox state (filesystem/config); the service
 /// process is re-run by the caller.
-//
-// too_many_arguments: the positional tail mirrors the registry's lifecycle
-// entry point (identity, bind, ports, metadata); the A3 carry-forward stamps
-// (ADR 0032) complete it, exactly as they completed
-// check_and_register_sandbox_lifecycle. A params struct is deferred to the
-// C2 wiring commit.
-#[allow(clippy::too_many_arguments)]
 async fn start_existing_sandbox<W: Workload>(
     state_dir: &Path,
     spec: &InstanceSpec,
     workload: &W,
-    bind_ip: IpAddr,
-    host_ports: &[u16],
-    port_pairs: &[PortMapping],
+    retained: RetainedRestart,
     image_out_hash: Option<&str>,
     config_hash: Option<&str>,
 ) -> Result<(Sandbox, ForegroundConfig)> {
-    // ADR 0030 addendum 2026-08-26: single encoded-name lookup — records
-    // drive the re-START, so a legacy raw-@ sandbox simply reads as gone.
-    // The encoding lives in the ONE SDK-boundary wrapper [`get_sandbox`].
-    let handle = super::get_sandbox(&spec.instance).await?;
-    let sandbox = handle.start().await?;
+    let sandbox = retained.handle.start().await?;
+    let host_ports: Vec<u16> = retained.ports.iter().map(|port| port.host).collect();
     let created_at = super::time::current_rfc3339_utc();
     super::super::port_registry::check_and_register_sandbox_lifecycle(
         state_dir,
         &spec.instance,
         spec.context.as_deref(),
         workload.name(),
-        bind_ip,
-        host_ports,
-        port_pairs,
+        retained.bind_ip,
+        &host_ports,
+        &retained.ports,
         &created_at,
         &workload.namespace(),
         spec.source_dir.as_deref(),
@@ -3405,6 +3574,229 @@ mod tests {
             "a pruned (Gone) predecessor record frees the preferred port before selection"
         );
         let _ = std::fs::remove_dir_all(&state_dir);
+        Ok(())
+    }
+
+    fn retained_network(ports: &[PortMapping]) -> microsandbox::sandbox::NetworkSpec {
+        microsandbox::sandbox::NetworkSpec {
+            enabled: true,
+            ports: ports
+                .iter()
+                .map(|port| microsandbox::sandbox::PublishedPortSpec {
+                    host_port: port.host,
+                    guest_port: port.guest,
+                    host_bind: port.bind_ip.to_string(),
+                    protocol: microsandbox::sandbox::PortProtocol::Tcp,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retained_ports_preserve_fallback_and_auto_allocations() -> Result<()> {
+        let state_dir = unique_state_dir("retained-fallback-auto");
+        let first = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let second = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let stored_ports = vec![
+            PortMapping {
+                name: Some("api".into()),
+                ..PortMapping::new(first.local_addr()?.port(), 4000)
+            },
+            PortMapping {
+                name: Some("metrics".into()),
+                ..PortMapping::new(second.local_addr()?.port(), 9000)
+            },
+        ];
+        drop((first, second));
+        register(
+            &state_dir,
+            "personal-service",
+            &stored_ports
+                .iter()
+                .map(|port| port.host)
+                .collect::<Vec<_>>(),
+        )?;
+        let network = retained_network(&stored_ports);
+        // Current declarations prefer a different host and request a new auto
+        // allocation; neither may replace the retained sandbox's bindings.
+        let mut known = stored_ports.clone();
+        known.extend([PortMapping::new(4000, 4000), PortMapping::new(0, 9000)]);
+        let actual = retained_port_mappings(&network, &known)?;
+        check_retained_ports_available(&state_dir, "personal-service", &actual)?;
+        assert_eq!(actual, stored_ports);
+        assert!(
+            crate::microsandbox::port_registry::find_record(&state_dir, "personal-service")?
+                .is_some()
+        );
+        std::fs::remove_dir_all(state_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_refuse_foreign_listener_instead_of_falling_back() -> Result<()> {
+        let state_dir = unique_state_dir("retained-listener");
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = listener.local_addr()?.port();
+        register(&state_dir, "personal-service", &[port])?;
+        let stored = retained_network(&[PortMapping::new(port, 4000)]);
+        let actual = retained_port_mappings(&stored, &[PortMapping::new(4000, 4000)])?;
+        let result = check_retained_ports_available(&state_dir, "personal-service", &actual);
+        assert!(
+            matches!(result, Err(error) if error.to_string().contains("retained port") && error.to_string().contains("unavailable"))
+        );
+        assert_eq!(actual[0].host, port);
+        std::fs::remove_dir_all(state_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_refuse_foreign_registry_reservation() -> Result<()> {
+        let state_dir = unique_state_dir("retained-foreign-record");
+        let port = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
+            .local_addr()?
+            .port();
+        register(&state_dir, "personal-other", &[port])?;
+        let result = check_retained_ports_available(
+            &state_dir,
+            "personal-service",
+            &[PortMapping::new(port, 4000)],
+        );
+        assert!(
+            matches!(result, Err(error) if error.to_string().contains("reserved by another instance"))
+        );
+        std::fs::remove_dir_all(state_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_recover_without_record_and_do_not_guess_labels() -> Result<()> {
+        let state_dir = unique_state_dir("retained-missing-record");
+        let bind_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+        let port = std::net::TcpListener::bind((bind_ip, 0))?
+            .local_addr()?
+            .port();
+        let stored = vec![PortMapping {
+            bind_ip,
+            ..PortMapping::new(port, 4000)
+        }];
+        let declared = vec![PortMapping {
+            name: Some("different".into()),
+            ..PortMapping::new(port, 9000)
+        }];
+        let actual = retained_port_mappings(&retained_network(&stored), &declared)?;
+        check_retained_ports_available(&state_dir, "personal-service", &actual)?;
+        assert_eq!(actual, stored);
+        assert_eq!(
+            retained_bind_ip(&actual, None, IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            bind_ip
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_recover_declared_name_from_unnamed_record() -> Result<()> {
+        let unnamed = PortMapping::new(4000, 4000);
+        let declared = PortMapping {
+            name: Some("api".into()),
+            ..unnamed.clone()
+        };
+        let network = retained_network(std::slice::from_ref(&unnamed));
+        let actual = retained_port_mappings(&network, &[unnamed, declared.clone()])?;
+        assert_eq!(actual, vec![declared]);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_reject_unsupported_or_unresolved_mappings() -> Result<()> {
+        let base = retained_network(&[PortMapping::new(4000, 4000)]);
+        let mut udp = base.clone();
+        udp.ports[0].protocol = microsandbox::sandbox::PortProtocol::Udp;
+        let mut unresolved = base.clone();
+        unresolved.ports[0].host_port = 0;
+        let mut invalid_bind = base.clone();
+        invalid_bind.ports[0].host_bind = "not-an-ip".into();
+        let mut mixed = base.clone();
+        let mut second = base.ports[0].clone();
+        second.host_bind = "127.0.0.2".into();
+        mixed.ports.push(second);
+        for network in [udp, unresolved, invalid_bind, mixed] {
+            assert!(
+                matches!(retained_port_mappings(&network, &[]), Err(error) if error.to_string().contains("retained"))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_disabled_network_keeps_parallel_slot_identity() -> Result<()> {
+        let mut network = retained_network(&[PortMapping::new(4000, 4000)]);
+        network.enabled = false;
+        let ports = retained_port_mappings(&network, &[])?;
+        assert!(ports.is_empty());
+        let allocated = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+        let recorded = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3));
+        assert_eq!(retained_bind_ip(&ports, None, allocated), allocated);
+        assert_eq!(
+            retained_bind_ip(&ports, Some(recorded), allocated),
+            recorded
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_fail_closed_on_unreadable_registry() -> Result<()> {
+        let state_dir = unique_state_dir("retained-bad-registry");
+        std::fs::create_dir_all(state_dir.join("var"))?;
+        std::fs::write(state_dir.join("var/run"), b"not a directory")?;
+        let result = check_retained_ports_available(
+            &state_dir,
+            "personal-service",
+            &[PortMapping::new(4000, 4000)],
+        );
+        assert!(matches!(result, Err(error) if error.downcast_ref::<std::io::Error>().is_some()));
+        std::fs::remove_dir_all(state_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn retained_ports_only_bypass_selection_for_confirmed_restarts() -> Result<()> {
+        use microsandbox::sandbox::SandboxStatus;
+        let chain = super::super::reconcile::default_chain();
+        for status in [SandboxStatus::Stopped, SandboxStatus::Crashed] {
+            let mut facts = super::super::reconcile::ReconcileFacts {
+                record: None,
+                msb_status: Some(status),
+                msb_unavailable: false,
+                dir_exists: true,
+                healthy: None,
+                recently_started: false,
+                source_gone: false,
+            };
+            assert!(restart_uses_stored_ports(
+                &facts,
+                &chain,
+                "personal-service",
+                false
+            )?);
+            assert!(!restart_uses_stored_ports(
+                &facts,
+                &chain,
+                "personal-service",
+                true
+            )?);
+            assert!(!restart_uses_stored_ports(
+                &facts,
+                &[crate::config::ConflictStep::Replace],
+                "personal-service",
+                false
+            )?);
+            facts.source_gone = true;
+            assert!(matches!(
+                restart_uses_stored_ports(&facts, &chain, "personal-service", false),
+                Err(error) if error.to_string().contains("source directory")
+            ));
+        }
         Ok(())
     }
 }
