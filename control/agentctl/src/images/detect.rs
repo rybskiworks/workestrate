@@ -15,7 +15,8 @@
 //!   shells out to the `nix` CLI; [`DrvEvalError::NixAbsent`] (spawn
 //!   `NotFound`) drives the §7 "nix absent from PATH" ladder.
 //! - [`StoreProbe`] — msb store-tag presence (ground truth for what is
-//!   loaded, spec §3.2). The real backend is `microsandbox::Image::get`; an
+//!   loaded, spec §3.2). The real backend combines `microsandbox::Image::get`
+//!   with read-only metadata and rootfs cache checks; an
 //!   unreachable store is a named ERROR per spec §7 ("msb store unreachable"
 //!   row), reusing the `ps.rs` unreachable-DB vocabulary (the
 //!   [`crate::microsandbox::runtime::ps::probe_liveness`] Io/Http/Database
@@ -222,7 +223,7 @@ impl std::fmt::Display for StoreUnreachable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "msb image store unreachable while probing tag '{}' (db unreachable: {}); \
+            "msb image store unreachable while probing tag '{}' (db unreachable or cache unavailable: {}); \
              the msb store is ground truth for loaded images, so `workload build` cannot \
              proceed without it — check that msb is installed and its database is readable \
              (MSB_HOME), then retry (spec 21 §7)",
@@ -236,7 +237,7 @@ impl std::error::Error for StoreUnreachable {}
 /// The store-presence seam. Async because the real backend is the async
 /// microsandbox SDK (the build handlers are async).
 pub trait StoreProbe {
-    /// Present iff the tag exists in the msb image store. An unreachable
+    /// Present iff the tag and its required local cache artifacts exist. An unreachable
     /// store is [`StoreUnreachable`], NEVER silently treated as Gone.
     fn tag_state(
         &mut self,
@@ -244,13 +245,35 @@ pub trait StoreProbe {
     ) -> impl std::future::Future<Output = Result<StoreTag, StoreUnreachable>> + Send;
 }
 
-/// Real backend: `microsandbox::Image::get`.
+/// Database lookup followed by read-only local cache verification.
 pub struct MsbStoreProbe;
 
 impl StoreProbe for MsbStoreProbe {
     async fn tag_state(&mut self, tag: &str) -> Result<StoreTag, StoreUnreachable> {
         match microsandbox::Image::get(tag).await {
-            Ok(_) => Ok(StoreTag::Present),
+            Ok(image) => {
+                let backend = microsandbox::default_backend();
+                let local = backend.as_local().ok_or_else(|| StoreUnreachable {
+                    tag: tag.to_string(),
+                    source: "local image cache is unavailable for the selected backend".into(),
+                })?;
+                let reference = image
+                    .reference()
+                    .parse()
+                    .map_err(|error| StoreUnreachable {
+                        tag: tag.to_string(),
+                        source: format!("invalid cached image reference: {error}"),
+                    })?;
+                super::cache_probe::cached_tag_state(
+                    &local.cache_dir(),
+                    &reference,
+                    image.manifest_digest(),
+                )
+                .map_err(|error| StoreUnreachable {
+                    tag: tag.to_string(),
+                    source: format!("cannot read image cache: {error}"),
+                })
+            }
             Err(microsandbox::MicrosandboxError::ImageNotFound(_)) => Ok(StoreTag::Gone),
             // §7 "msb store unreachable": probe_liveness's reachability class
             // is Io / Http / Database. Any OTHER SDK error variant likewise

@@ -16,7 +16,6 @@ OTHER_REV = "b" * 40
 MANIFEST = """[dependencies]
 microsandbox = { version = "=0.6.16" }
 microsandbox-network = "=0.6.16"
-[dev-dependencies]
 microsandbox-image = "=0.6.16"
 """
 
@@ -113,6 +112,11 @@ class VersionPinsTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.manifest = MANIFEST.replace(line, "")
                 self.check("version pin missing")
+
+    def test_image_dependency_cannot_be_dev_only(self):
+        self.manifest = MANIFEST.replace('microsandbox-image = "=0.6.16"',
+                                         '[dev-dependencies]\nmicrosandbox-image = "=0.6.16"')
+        self.check("[dependencies] microsandbox-image version pin missing")
 
     def test_nonexact_dependency_pins(self):
         for pin in ("0.6.16", "^0.6.16", "~0.6.16", ">=0.6.16", "=0.6", "=0.6.*", "="):

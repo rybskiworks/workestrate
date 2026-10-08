@@ -72,9 +72,10 @@ for section in ("dependencies", "dev-dependencies", "build-dependencies"):
     if not isinstance(entries, dict):
         failures.append(f"Cargo.toml: [{section}] must be a table")
         continue
-    required = {"dependencies": "microsandbox", "dev-dependencies": "microsandbox-image"}.get(section)
-    if required and required not in entries:
-        failures.append(f"Cargo.toml: [{section}] {required} version pin missing")
+    required = ("microsandbox", "microsandbox-image") if section == "dependencies" else ()
+    for name in required:
+        if name not in entries:
+            failures.append(f"Cargo.toml: [{section}] {name} version pin missing")
     for name, dependency in entries.items():
         if name != "microsandbox" and not name.startswith("microsandbox-"):
             continue

@@ -162,6 +162,18 @@ Legacy instance records with `context: null` remain valid with an unknown contex
 
 ## 8. Identity and image tags
 
+An image is available only when its database tag and the local backend's cached
+manifest metadata, layers, filesystem metadata, and VMDK descriptor are present.
+Missing artifacts, malformed metadata, or invalid EROFS images trigger import
+from the Nix image output;
+`workload build --check` reports that work without modifying the cache. Cache I/O
+failures remain errors rather than being treated as absent images.
+
+`workload build --force` and the selected workload's `--reload-images` explicitly
+reimport the realized image even when Nix returns an unchanged output path. This
+repairs image storage; it does not replace an existing sandbox or refresh that
+sandbox's retained configuration.
+
 Identity has three axes (ADR 0032 §Identity model): workload, context,
 instance id. **slot** = `<workload>` (no context) or `<ctx>-<workload>`;
 **instance** = the slot (singleton) or `slot@id` (parallel / per-dir /

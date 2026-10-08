@@ -10,7 +10,7 @@
 #       (i.e. patched to the fork via [patch.crates-io], not crates.io).
 #   A2. every microsandbox-* version == X, where X is parsed from
 #       control/agentctl/Cargo.toml ([dependencies] microsandbox +
-#       [dev-dependencies] microsandbox-image `=X` pins — never literals here).
+#       [dependencies] microsandbox-image `=X` pins — never literals here).
 #   A3. smoltcp satisfies the fork's requirement parsed from
 #       control/agentctl/vendor/microsandbox-fork/Cargo.toml
 #       [workspace.dependencies] (prefix match on major.minor), AND
@@ -63,30 +63,30 @@ try:
 except KeyError:
     dep_pin = None
 try:
-    dev_pin = manifest["dev-dependencies"]["microsandbox-image"]
-    if isinstance(dev_pin, dict):
-        dev_pin = dev_pin.get("version")
+    image_pin = manifest["dependencies"]["microsandbox-image"]
+    if isinstance(image_pin, dict):
+        image_pin = image_pin.get("version")
 except KeyError:
-    dev_pin = None
+    image_pin = None
 
-if not dep_pin or not dev_pin:
+if not dep_pin or not image_pin:
     print("lock-guard: FAIL: could not parse =X pins for microsandbox "
-          "([dependencies]) / microsandbox-image ([dev-dependencies]) from "
-          f"{manifest_path} (got {dep_pin!r} / {dev_pin!r})")
+          "([dependencies]) / microsandbox-image ([dependencies]) from "
+          f"{manifest_path} (got {dep_pin!r} / {image_pin!r})")
     print(FIX)
     sys.exit(1)
-if not dep_pin.startswith("=") or not dev_pin.startswith("="):
+if not dep_pin.startswith("=") or not image_pin.startswith("="):
     failures.append(
         f"Cargo.toml pins must be exact (=X style), got microsandbox={dep_pin!r} "
-        f"microsandbox-image={dev_pin!r}"
+        f"microsandbox-image={image_pin!r}"
     )
     X = None
 else:
     X = dep_pin[1:]
-    if dev_pin[1:] != X:
+    if image_pin[1:] != X:
         failures.append(
             f"Cargo.toml fork pins disagree: microsandbox={dep_pin!r} vs "
-            f"microsandbox-image={dev_pin!r} (expected both ={X})"
+            f"microsandbox-image={image_pin!r} (expected both ={X})"
         )
 
 # --- Parse control/agentctl/Cargo.lock ---
